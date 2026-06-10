@@ -2,9 +2,6 @@ import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
-load_dotenv()
-
-
 @dataclass
 class Config:
     bot_token: str
@@ -21,6 +18,7 @@ class Config:
 
 
 def load_config() -> Config:
+    load_dotenv()
     return Config(
         bot_token=os.environ["BOT_TOKEN"],
         admin_id=int(os.environ["ADMIN_ID"]),
