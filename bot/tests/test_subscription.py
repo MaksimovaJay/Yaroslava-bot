@@ -1,0 +1,60 @@
+import pytest
+from datetime import datetime, timedelta
+from database.db import init_db
+from database import queries
+from services.subscription import create_subscription, renew_subscription
+from config import Config
+
+
+@pytest.fixture
+async def db(tmp_path):
+    path = str(tmp_path / "test.db")
+    await init_db(path)
+    await queries.upsert_user(path, 1, None, "TestUser")
+    return path
+
+
+@pytest.fixture
+def config(db):
+    return Config(
+        bot_token="test_token",
+        admin_id=1,
+        channel_id=-100,
+        db_path=db,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_1m_subscription_expiry(db, config):
+    sub = await create_subscription(db, 1, "1m", config)
+    diff = (sub["expires_at"] - datetime.now()).days
+    assert 29 <= diff <= 30
+
+
+@pytest.mark.asyncio
+async def test_create_2m_subscription_expiry(db, config):
+    await queries.upsert_user(db, 2, None, "User2")
+    sub = await create_subscription(db, 2, "2m", config)
+    diff = (sub["expires_at"] - datetime.now()).days
+    assert 59 <= diff <= 60
+
+
+@pytest.mark.asyncio
+async def test_renew_subscription_extends_from_expiry(db, config):
+    sub = await create_subscription(db, 1, "1m", config)
+    old_expires = sub["expires_at"]
+    db_sub = await queries.get_active_subscription(db, 1)
+    new_expires = await renew_subscription(db, db_sub, config)
+    assert new_expires > old_expires
+    diff = (new_expires - old_expires).days
+    assert 29 <= diff <= 30
+
+
+@pytest.mark.asyncio
+async def test_renew_expired_subscription_starts_from_now(db, config):
+    past = datetime.now() - timedelta(days=5)
+    sub_id = await queries.create_subscription(db, 1, "1m", past)
+    db_sub = {"id": sub_id, "plan": "1m", "expires_at": past.isoformat()}
+    new_expires = await renew_subscription(db, db_sub, config)
+    diff = (new_expires - datetime.now()).days
+    assert 29 <= diff <= 30
