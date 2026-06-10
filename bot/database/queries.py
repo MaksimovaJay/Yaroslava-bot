@@ -126,7 +126,7 @@ async def create_payment(
 
 async def update_payment(
     db_path: str,
-    payment_id: int,
+    record_id: int,
     status: str,
     external_id: Optional[str] = None,
 ) -> None:
@@ -134,12 +134,14 @@ async def update_payment(
         await db.execute("PRAGMA foreign_keys = ON")
         await db.execute(
             "UPDATE payments SET status = ?, payment_id = ? WHERE id = ?",
-            (status, external_id, payment_id),
+            (status, external_id, record_id),
         )
         await db.commit()
 
 
 async def get_subscriptions_expiring_soon(db_path: str, days: int) -> list:
+    from datetime import timedelta
+    cutoff = (datetime.now() + timedelta(days=days)).isoformat()
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -149,8 +151,8 @@ async def get_subscriptions_expiring_soon(db_path: str, days: int) -> list:
                WHERE s.status = 'active'
                  AND s.in_grace = 0
                  AND s.expires_at > datetime('now')
-                 AND s.expires_at <= datetime('now', ? || ' days')""",
-            (str(days),),
+                 AND s.expires_at <= ?""",
+            (cutoff,),
         ) as cursor:
             return [dict(row) async for row in cursor]
 

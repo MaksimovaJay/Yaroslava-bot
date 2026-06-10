@@ -99,3 +99,16 @@ async def test_get_monthly_revenue(db):
     await queries.update_payment(db, pay_id2, "failed", None)
     revenue = await queries.get_monthly_revenue(db)
     assert revenue == 500
+
+
+@pytest.mark.asyncio
+async def test_extend_subscription(db):
+    await queries.upsert_user(db, 9, None, "Ivan")
+    expires = datetime.now() + timedelta(days=30)
+    await queries.create_subscription(db, 9, "1m", expires)
+    sub = await queries.get_active_subscription(db, 9)
+    new_expires = datetime.now() + timedelta(days=60)
+    await queries.extend_subscription(db, sub["id"], new_expires)
+    sub_after = await queries.get_active_subscription(db, 9)
+    assert sub_after is not None
+    assert sub_after["in_grace"] == 0
