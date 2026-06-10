@@ -134,7 +134,9 @@ async def admin_ban_execute(
         await message.answer("❌ Неверный формат. Введите числовой Telegram ID.")
         return
     target_id = int(text)
-    await queries.upsert_user(config.db_path, target_id, None, "banned_user")
+    existing = await queries.get_user(config.db_path, target_id)
+    if not existing:
+        await queries.upsert_user(config.db_path, target_id, None, str(target_id))
     await queries.ban_user(config.db_path, target_id)
     try:
         await kick_user(bot, config.channel_id, target_id)

@@ -24,6 +24,7 @@ async def handle_plan_selection(
     amount = config.PLAN_1M_PRICE if plan == "1m" else config.PLAN_2M_PRICE
     plan_label = "1 месяц" if plan == "1m" else "2 месяца"
 
+    await callback.answer()
     await callback.message.edit_text("⏳ Обрабатываем оплату...")
 
     pay_rec_id = await queries.create_payment(config.db_path, user.id, amount, plan)
