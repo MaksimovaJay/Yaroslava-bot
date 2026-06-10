@@ -41,8 +41,11 @@ async def process_expired_subscriptions(
         )
         if result.success:
             new_expires = await renew_subscription(config.db_path, sub, config)
-            await queries.create_payment(
+            record_id = await queries.create_payment(
                 config.db_path, sub["user_id"], amount, sub["plan"]
+            )
+            await queries.update_payment(
+                config.db_path, record_id, "success", result.payment_id
             )
             try:
                 await bot.send_message(
@@ -52,7 +55,7 @@ async def process_expired_subscriptions(
             except Exception as e:
                 logger.warning("Could not notify %s: %s", sub["user_id"], e)
         else:
-            grace_ends_at = datetime.now() + timedelta(days=config.GRACE_PERIOD_DAYS)
+            grace_ends_at = datetime.utcnow() + timedelta(days=config.GRACE_PERIOD_DAYS)
             await queries.start_grace_period(config.db_path, sub["id"], grace_ends_at)
             try:
                 await bot.send_message(
