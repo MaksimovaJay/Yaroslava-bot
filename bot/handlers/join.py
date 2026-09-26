@@ -1,13 +1,28 @@
 import logging
-from aiogram import Router, Bot
-from aiogram.types import ChatJoinRequest
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-
+from aiogram import Router, Bot, F
+from aiogram.types import ChatJoinRequest, Message
 from config import Config
 from database import queries
+from keyboards import plans_keyboard
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+
+@router.message(F.new_chat_members)
+async def delete_join_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.message(F.left_chat_member)
+async def delete_leave_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 @router.chat_join_request()
@@ -30,24 +45,13 @@ async def handle_join_request(
         await request.approve()
         return
 
-    builder = InlineKeyboardBuilder()
-    builder.button(
-        text="💳 1 месяц — 500 ₽",
-        callback_data=f"plan:1m:{channel_id}",
-    )
-    builder.button(
-        text="💳 2 месяца — 900 ₽",
-        callback_data=f"plan:2m:{channel_id}",
-    )
-    builder.adjust(1)
-
     try:
         await bot.send_message(
             user.id,
             f"👋 Привет, {user.first_name}!\n\n"
             f"Это закрытый канал с платной подпиской.\n"
             f"Выберите тариф:",
-            reply_markup=builder.as_markup(),
+            reply_markup=plans_keyboard(config, channel_id),
         )
     except Exception:
         logger.warning(

@@ -35,7 +35,7 @@ def config(db):
 
 @pytest.mark.asyncio
 async def test_send_reminder_for_expiring_subscription(db, config):
-    expires = datetime.now() + timedelta(days=2)
+    expires = datetime.utcnow() + timedelta(days=2)
     await queries.create_subscription(db, 100, "1m", expires)
     bot = AsyncMock()
     await send_expiry_reminders(bot, config)
@@ -46,7 +46,7 @@ async def test_send_reminder_for_expiring_subscription(db, config):
 
 @pytest.mark.asyncio
 async def test_no_reminder_for_non_expiring_subscription(db, config):
-    expires = datetime.now() + timedelta(days=10)
+    expires = datetime.utcnow() + timedelta(days=10)
     await queries.create_subscription(db, 100, "1m", expires)
     bot = AsyncMock()
     await send_expiry_reminders(bot, config)
@@ -55,7 +55,7 @@ async def test_no_reminder_for_non_expiring_subscription(db, config):
 
 @pytest.mark.asyncio
 async def test_successful_charge_extends_subscription(db, config):
-    expires = datetime.now() - timedelta(hours=1)
+    expires = datetime.utcnow() - timedelta(hours=1)
     await queries.create_subscription(db, 100, "1m", expires)
     bot = AsyncMock()
     payment = AsyncMock()
@@ -64,12 +64,12 @@ async def test_successful_charge_extends_subscription(db, config):
     sub = await queries.get_active_subscription(db, 100)
     assert sub is not None
     new_expires = datetime.fromisoformat(sub["expires_at"])
-    assert new_expires > datetime.now() + timedelta(days=28)
+    assert new_expires > datetime.utcnow() + timedelta(days=28)
 
 
 @pytest.mark.asyncio
 async def test_failed_charge_starts_grace_period(db, config):
-    expires = datetime.now() - timedelta(hours=1)
+    expires = datetime.utcnow() - timedelta(hours=1)
     await queries.create_subscription(db, 100, "1m", expires)
     bot = AsyncMock()
     payment = AsyncMock()
@@ -85,9 +85,9 @@ async def test_failed_charge_starts_grace_period(db, config):
 
 @pytest.mark.asyncio
 async def test_grace_period_ended_kicks_user(db, config):
-    expires = datetime.now() - timedelta(days=4)
+    expires = datetime.utcnow() - timedelta(days=4)
     sub_id = await queries.create_subscription(db, 100, "1m", expires)
-    grace_end = datetime.now() - timedelta(hours=1)
+    grace_end = datetime.utcnow() - timedelta(hours=1)
     await queries.start_grace_period(db, sub_id, grace_end)
     bot = AsyncMock()
     await process_grace_period_ended(bot, config)
@@ -95,3 +95,28 @@ async def test_grace_period_ended_kicks_user(db, config):
     bot.unban_chat_member.assert_called_once_with(-100, 100)
     sub = await queries.get_active_subscription(db, 100)
     assert sub is None
+
+
+@pytest.mark.asyncio
+async def test_grace_period_ended_does_not_kick_if_paid_again(db, config):
+    old_id = await queries.create_subscription(
+        db, 100, "1m", datetime.utcnow() - timedelta(days=4)
+    )
+    await queries.start_grace_period(db, old_id, datetime.utcnow() - timedelta(hours=1))
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=30))
+    bot = AsyncMock()
+    await process_grace_period_ended(bot, config)
+    bot.ban_chat_member.assert_not_called()
+    assert await queries.get_active_subscription(db, 100) is not None
+
+
+@pytest.mark.asyncio
+async def test_failed_charge_offers_plan_buttons(db, config):
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() - timedelta(hours=1))
+    bot = AsyncMock()
+    payment = AsyncMock()
+    payment.charge_saved.return_value = MagicMock(success=False, error="no token")
+    await process_expired_subscriptions(bot, config, payment)
+    markup = bot.send_message.call_args.kwargs["reply_markup"]
+    callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert callbacks == ["plan:1m:-100", "plan:2m:-100"]

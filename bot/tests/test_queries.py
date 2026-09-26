@@ -42,7 +42,7 @@ async def test_ban_user(db):
 @pytest.mark.asyncio
 async def test_get_active_subscription(db):
     await queries.upsert_user(db, 3, None, "Carol")
-    expires = datetime.now() + timedelta(days=30)
+    expires = datetime.utcnow() + timedelta(days=30)
     await queries.create_subscription(db, 3, "1m", expires)
     sub = await queries.get_active_subscription(db, 3)
     assert sub is not None
@@ -53,7 +53,7 @@ async def test_get_active_subscription(db):
 @pytest.mark.asyncio
 async def test_expired_subscription_not_returned_as_active(db):
     await queries.upsert_user(db, 4, None, "Dave")
-    expires = datetime.now() - timedelta(days=1)
+    expires = datetime.utcnow() - timedelta(days=1)
     await queries.create_subscription(db, 4, "1m", expires)
     sub = await queries.get_active_subscription(db, 4)
     assert sub is None
@@ -70,7 +70,7 @@ async def test_create_payment_and_update(db):
 @pytest.mark.asyncio
 async def test_expire_subscription(db):
     await queries.upsert_user(db, 6, None, "Frank")
-    expires = datetime.now() + timedelta(days=30)
+    expires = datetime.utcnow() + timedelta(days=30)
     await queries.create_subscription(db, 6, "1m", expires)
     sub = await queries.get_active_subscription(db, 6)
     await queries.expire_subscription(db, sub["id"])
@@ -80,11 +80,11 @@ async def test_expire_subscription(db):
 @pytest.mark.asyncio
 async def test_start_grace_period(db):
     await queries.upsert_user(db, 7, None, "Grace")
-    expires = datetime.now() - timedelta(hours=1)
+    expires = datetime.utcnow() - timedelta(hours=1)
     await queries.create_subscription(db, 7, "1m", expires)
     subs = await queries.get_expired_subscriptions(db)
     assert len(subs) == 1
-    grace_end = datetime.now() + timedelta(days=3)
+    grace_end = datetime.utcnow() + timedelta(days=3)
     await queries.start_grace_period(db, subs[0]["id"], grace_end)
     expired_now = await queries.get_expired_subscriptions(db)
     assert len(expired_now) == 0
@@ -104,11 +104,43 @@ async def test_get_monthly_revenue(db):
 @pytest.mark.asyncio
 async def test_extend_subscription(db):
     await queries.upsert_user(db, 9, None, "Ivan")
-    expires = datetime.now() + timedelta(days=30)
+    expires = datetime.utcnow() + timedelta(days=30)
     await queries.create_subscription(db, 9, "1m", expires)
     sub = await queries.get_active_subscription(db, 9)
-    new_expires = datetime.now() + timedelta(days=60)
+    new_expires = datetime.utcnow() + timedelta(days=60)
     await queries.extend_subscription(db, sub["id"], new_expires)
     sub_after = await queries.get_active_subscription(db, 9)
     assert sub_after is not None
     assert sub_after["in_grace"] == 0
+
+
+@pytest.mark.asyncio
+async def test_subscription_expired_earlier_today_is_detected(db):
+    # Regression: 'T'-separated timestamps used to compare as later than
+    # SQLite's space-separated datetime('now') on the same day.
+    await queries.upsert_user(db, 10, None, "Jack")
+    expires = datetime.utcnow() - timedelta(minutes=1)
+    await queries.create_subscription(db, 10, "1m", expires)
+    assert await queries.get_active_subscription(db, 10) is None
+    assert len(await queries.get_expired_subscriptions(db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_ban_cancels_active_subscription(db):
+    await queries.upsert_user(db, 11, None, "Kate")
+    await queries.create_subscription(db, 11, "1m", datetime.utcnow() - timedelta(hours=1))
+    await queries.ban_user(db, 11)
+    assert await queries.get_expired_subscriptions(db) == []
+
+
+@pytest.mark.asyncio
+async def test_promo_code_days_and_single_use(db):
+    await queries.upsert_user(db, 12, None, "Leo")
+    await queries.upsert_user(db, 13, None, "Mia")
+    await queries.create_promo_code(db, "TRIAL1", 14)
+    await queries.create_promo_code(db, "OLDSTYLE")
+    assert (await queries.get_promo_code(db, "TRIAL1"))["days"] == 14
+    assert (await queries.get_promo_code(db, "OLDSTYLE"))["days"] == 60
+    assert await queries.use_promo_code(db, "TRIAL1", 12) is True
+    assert await queries.use_promo_code(db, "TRIAL1", 13) is False
+    assert (await queries.get_promo_code(db, "TRIAL1"))["used_by"] == 12

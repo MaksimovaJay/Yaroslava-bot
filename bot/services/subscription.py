@@ -7,9 +7,11 @@ from database import queries
 
 
 async def create_subscription(
-    db_path: str, user_id: int, plan: str, config: Config
+    db_path: str, user_id: int, plan: str, config: Config,
+    days: Optional[int] = None,
 ) -> dict:
-    days = config.PLAN_1M_DAYS if plan == "1m" else config.PLAN_2M_DAYS
+    if days is None:
+        days = config.PLAN_1M_DAYS if plan == "1m" else config.PLAN_2M_DAYS
     expires_at = datetime.utcnow() + timedelta(days=days)
     sub_id = await queries.create_subscription(db_path, user_id, plan, expires_at)
     return {"id": sub_id, "expires_at": expires_at, "plan": plan}
@@ -24,6 +26,17 @@ async def renew_subscription(
     new_expires = base + timedelta(days=days)
     await queries.extend_subscription(db_path, sub["id"], new_expires)
     return new_expires
+
+
+def days_label(days: int) -> str:
+    """14 -> '2 недели', 60 -> '2 месяца', 10 -> '10 дн.'"""
+    if days % 30 == 0:
+        months = days // 30
+        return f"{months} месяц" if months == 1 else f"{months} месяца"
+    if days % 7 == 0:
+        weeks = days // 7
+        return f"{weeks} неделю" if weeks == 1 else f"{weeks} недели"
+    return f"{days} дн."
 
 
 async def kick_user(bot: Bot, channel_id: int, user_id: int) -> None:

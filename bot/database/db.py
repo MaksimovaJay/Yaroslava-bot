@@ -40,6 +40,25 @@ CREATE TABLE IF NOT EXISTS payments (
 """
 
 
+_CREATE_PROMO_CODES = """
+CREATE TABLE IF NOT EXISTS promo_codes (
+    code       TEXT PRIMARY KEY,
+    is_used    INTEGER DEFAULT 0,
+    used_by    INTEGER REFERENCES users(id),
+    used_at    DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    days       INTEGER NOT NULL DEFAULT 60
+)
+"""
+
+
+async def _add_column_if_missing(db, table: str, column: str, ddl: str) -> None:
+    async with db.execute(f"PRAGMA table_info({table})") as cursor:
+        columns = {row[1] async for row in cursor}
+    if column not in columns:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 async def init_db(db_path: str) -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
@@ -47,4 +66,8 @@ async def init_db(db_path: str) -> None:
         await db.execute(_CREATE_USERS)
         await db.execute(_CREATE_SUBSCRIPTIONS)
         await db.execute(_CREATE_PAYMENTS)
+        await db.execute(_CREATE_PROMO_CODES)
+        await _add_column_if_missing(
+            db, "promo_codes", "days", "INTEGER NOT NULL DEFAULT 60"
+        )
         await db.commit()

@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timedelta
 from aiogram import Router, Bot, F
 from aiogram.filters import Command
@@ -9,7 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import Config
 from database import queries
-from services.subscription import kick_user, create_subscription
+from services.subscription import kick_user, create_subscription, days_label
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -30,12 +31,13 @@ def _admin_keyboard():
     builder.button(text="👥 Подписчики", callback_data="admin:subs:0")
     builder.button(text="🚫 Заблокировать", callback_data="admin:ban")
     builder.button(text="➕ Добавить вручную", callback_data="admin:add")
+    builder.button(text="🎟 Промокоды", callback_data="admin:promo")
     builder.adjust(2)
     return builder.as_markup()
 
 
 def _is_admin(user_id: int, config: Config) -> bool:
-    return user_id == config.admin_id
+    return user_id in config.admin_ids
 
 
 @router.message(Command("admin"))
@@ -49,6 +51,7 @@ async def cmd_admin(message: Message, config: Config) -> None:
 async def admin_back(callback: CallbackQuery, config: Config) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
+    await callback.answer()
     await callback.message.edit_text(
         "Панель администратора:", reply_markup=_admin_keyboard()
     )
@@ -58,6 +61,7 @@ async def admin_back(callback: CallbackQuery, config: Config) -> None:
 async def admin_stats(callback: CallbackQuery, config: Config) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
+    await callback.answer()
     subs = await queries.get_all_active_subscribers(config.db_path)
     revenue = await queries.get_monthly_revenue(config.db_path)
     expiring = await queries.get_subscriptions_expiring_soon(
@@ -87,6 +91,7 @@ async def admin_subscribers(callback: CallbackQuery, config: Config) -> None:
     if not subs:
         await callback.answer("Нет активных подписчиков", show_alert=True)
         return
+    await callback.answer()
 
     lines = [f"👥 Подписчики (стр. {page + 1}/{(total - 1) // per_page + 1}):\n"]
     for sub in subs:
@@ -113,6 +118,7 @@ async def admin_ban_start(
 ) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
+    await callback.answer()
     await state.set_state(BanState.waiting_for_user_id)
     builder = InlineKeyboardBuilder()
     builder.button(text="Отмена", callback_data="admin:cancel")
@@ -128,11 +134,11 @@ async def admin_ban_execute(
 ) -> None:
     if not _is_admin(message.from_user.id, config):
         return
-    await state.clear()
-    text = message.text.strip()
+    text = (message.text or "").strip()
     if not text.isdigit():
         await message.answer("❌ Неверный формат. Введите числовой Telegram ID.")
         return
+    await state.clear()
     target_id = int(text)
     existing = await queries.get_user(config.db_path, target_id)
     if not existing:
@@ -154,6 +160,7 @@ async def admin_add_start(
 ) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
+    await callback.answer()
     await state.set_state(AddState.waiting_for_user_id)
     builder = InlineKeyboardBuilder()
     builder.button(text="Отмена", callback_data="admin:cancel")
@@ -169,7 +176,7 @@ async def admin_add_get_id(
 ) -> None:
     if not _is_admin(message.from_user.id, config):
         return
-    text = message.text.strip()
+    text = (message.text or "").strip()
     if not text.isdigit():
         await message.answer("❌ Неверный формат. Введите числовой Telegram ID.")
         return
@@ -188,6 +195,7 @@ async def admin_add_execute(
 ) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
+    await callback.answer()
     data = await state.get_data()
     await state.clear()
     target_id = data["target_id"]
@@ -230,5 +238,69 @@ async def admin_cancel(
 ) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
+    await callback.answer()
     await state.clear()
     await callback.message.edit_text("Отменено.", reply_markup=_admin_keyboard())
+
+
+def _generate_code() -> str:
+    return secrets.token_urlsafe(6).upper().replace("-", "").replace("_", "")[:8]
+
+
+@router.callback_query(F.data == "admin:promo")
+async def admin_promo(callback: CallbackQuery, config: Config) -> None:
+    if not _is_admin(callback.from_user.id, config):
+        return
+    await callback.answer()
+    codes = await queries.get_all_promo_codes(config.db_path)
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"🎁 Промокод на {days_label(config.PROMO_DAYS)}",
+        callback_data=f"admin:promo:gen:{config.PROMO_DAYS}",
+    )
+    builder.button(
+        text=f"🧪 Пробный на {days_label(config.TRIAL_DAYS)}",
+        callback_data=f"admin:promo:gen:{config.TRIAL_DAYS}",
+    )
+    builder.button(text="◀️ Назад", callback_data="admin:back")
+    builder.adjust(1)
+
+    if not codes:
+        text = "🎟 Промокоды\n\nПока нет промокодов."
+    else:
+        lines = []
+        for c in codes[:20]:
+            status = "✅ использован" if c["is_used"] else "⏳ свободен"
+            lines.append(f"<code>{c['code']}</code> — {days_label(c['days'])}, {status}")
+        text = "🎟 Промокоды (последние 20):\n\n" + "\n".join(lines)
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("admin:promo:gen"))
+async def admin_promo_gen(callback: CallbackQuery, bot: Bot, config: Config) -> None:
+    if not _is_admin(callback.from_user.id, config):
+        return
+    await callback.answer()
+    parts = callback.data.split(":")
+    # "admin:promo:gen" without days comes from buttons in old messages
+    days = int(parts[3]) if len(parts) > 3 else config.PROMO_DAYS
+    if days not in (config.PROMO_DAYS, config.TRIAL_DAYS):
+        return
+    code = _generate_code()
+    await queries.create_promo_code(config.db_path, code, days)
+    bot_username = (await bot.me()).username
+    link = f"https://t.me/{bot_username}?start=promo_{code}"
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🎟 Ещё такой же", callback_data=f"admin:promo:gen:{days}")
+    builder.button(text="📋 Список кодов", callback_data="admin:promo")
+    builder.button(text="◀️ Назад", callback_data="admin:back")
+    builder.adjust(1)
+    kind = "Пробный промокод" if days == config.TRIAL_DAYS else "Промокод"
+    await callback.message.edit_text(
+        f"✅ {kind} на {days_label(days)} создан (одноразовый):\n\n"
+        f"Код: <code>{code}</code>\n\n"
+        f"Ссылка для активации:\n{link}",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )

@@ -8,6 +8,7 @@ from config import Config
 from database import queries
 from services.subscription import renew_subscription, kick_user
 from services.payment.base import PaymentProvider
+from keyboards import plans_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,15 @@ async def send_expiry_reminders(bot: Bot, config: Config) -> None:
         config.db_path, config.REMINDER_DAYS_BEFORE
     )
     for sub in expiring:
-        expires_date = sub["expires_at"][:10]
+        expires_date = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
+        if sub.get("payment_token"):
+            tail = "Она продлится автоматически — ничего делать не нужно."
+        else:
+            tail = "В день окончания бот пришлёт кнопки для продления."
         try:
             await bot.send_message(
                 sub["user_id"],
-                f"⏰ Ваша подписка истекает {expires_date}.\n"
-                f"Она продлится автоматически — ничего делать не нужно.",
+                f"⏰ Ваша подписка истекает {expires_date}.\n{tail}",
             )
         except Exception as e:
             logger.warning("Could not send reminder to %s: %s", sub["user_id"], e)
@@ -33,6 +37,10 @@ async def process_expired_subscriptions(
 ) -> None:
     expired = await queries.get_expired_subscriptions(config.db_path)
     for sub in expired:
+        # User already bought a new subscription — just close the old one
+        if await queries.get_active_subscription(config.db_path, sub["user_id"]):
+            await queries.expire_subscription(config.db_path, sub["id"])
+            continue
         amount = (
             config.PLAN_1M_PRICE if sub["plan"] == "1m" else config.PLAN_2M_PRICE
         )
@@ -60,9 +68,10 @@ async def process_expired_subscriptions(
             try:
                 await bot.send_message(
                     sub["user_id"],
-                    f"⚠️ Не удалось списать оплату за подписку.\n"
-                    f"У вас есть {config.GRACE_PERIOD_DAYS} дня, чтобы оплатить вручную.\n"
-                    f"Напишите /pay для оплаты.",
+                    f"⚠️ Срок подписки закончился, автоматически продлить её не удалось.\n"
+                    f"Доступ сохранится ещё {config.GRACE_PERIOD_DAYS} дня — "
+                    f"выберите тариф, чтобы продлить:",
+                    reply_markup=plans_keyboard(config, config.channel_id),
                 )
             except Exception as e:
                 logger.warning("Could not notify %s: %s", sub["user_id"], e)
@@ -71,6 +80,12 @@ async def process_expired_subscriptions(
 async def process_grace_period_ended(bot: Bot, config: Config) -> None:
     ended = await queries.get_grace_period_ended(config.db_path)
     for sub in ended:
+        paid_again = await queries.get_active_subscription(
+            config.db_path, sub["user_id"]
+        )
+        if sub["user_id"] in config.admin_ids or paid_again:
+            await queries.expire_subscription(config.db_path, sub["id"])
+            continue
         try:
             await kick_user(bot, config.channel_id, sub["user_id"])
         except Exception as e:

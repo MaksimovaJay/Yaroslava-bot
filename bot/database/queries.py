@@ -41,6 +41,12 @@ async def ban_user(db_path: str, user_id: int) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA foreign_keys = ON")
         await db.execute("UPDATE users SET is_banned = 1 WHERE id = ?", (user_id,))
+        # Otherwise the scheduler would keep auto-charging a banned user
+        await db.execute(
+            """UPDATE subscriptions SET status = 'cancelled'
+               WHERE user_id = ? AND status = 'active'""",
+            (user_id,),
+        )
         await db.commit()
 
 
@@ -51,7 +57,7 @@ async def get_active_subscription(db_path: str, user_id: int) -> Optional[dict]:
             """SELECT * FROM subscriptions
                WHERE user_id = ?
                  AND status = 'active'
-                 AND expires_at > datetime('now')
+                 AND datetime(expires_at) > datetime('now')
                ORDER BY expires_at DESC
                LIMIT 1""",
             (user_id,),
@@ -71,6 +77,16 @@ async def create_subscription(
         )
         await db.commit()
         return cursor.lastrowid
+
+
+async def save_payment_token(db_path: str, sub_id: int, token: str) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            "UPDATE subscriptions SET payment_token = ? WHERE id = ?",
+            (token, sub_id),
+        )
+        await db.commit()
 
 
 async def extend_subscription(
@@ -139,9 +155,22 @@ async def update_payment(
         await db.commit()
 
 
+async def get_pending_payment_by_external_id(
+    db_path: str, external_id: str
+) -> Optional[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM payments WHERE payment_id = ? AND status = 'pending'",
+            (external_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
 async def get_subscriptions_expiring_soon(db_path: str, days: int) -> list:
     from datetime import timedelta
-    cutoff = (datetime.now() + timedelta(days=days)).isoformat()
+    cutoff = (datetime.utcnow() + timedelta(days=days)).isoformat()
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -150,8 +179,8 @@ async def get_subscriptions_expiring_soon(db_path: str, days: int) -> list:
                JOIN users u ON u.id = s.user_id
                WHERE s.status = 'active'
                  AND s.in_grace = 0
-                 AND s.expires_at > datetime('now')
-                 AND s.expires_at <= ?""",
+                 AND datetime(s.expires_at) > datetime('now')
+                 AND datetime(s.expires_at) <= datetime(?)""",
             (cutoff,),
         ) as cursor:
             return [dict(row) async for row in cursor]
@@ -167,7 +196,7 @@ async def get_expired_subscriptions(db_path: str) -> list:
                JOIN users u ON u.id = s.user_id
                WHERE s.status = 'active'
                  AND s.in_grace = 0
-                 AND s.expires_at <= datetime('now')"""
+                 AND datetime(s.expires_at) <= datetime('now')"""
         ) as cursor:
             return [dict(row) async for row in cursor]
 
@@ -182,7 +211,7 @@ async def get_grace_period_ended(db_path: str) -> list:
                JOIN users u ON u.id = s.user_id
                WHERE s.status = 'active'
                  AND s.in_grace = 1
-                 AND s.grace_ends_at <= datetime('now')"""
+                 AND datetime(s.grace_ends_at) <= datetime('now')"""
         ) as cursor:
             return [dict(row) async for row in cursor]
 
@@ -195,8 +224,50 @@ async def get_all_active_subscribers(db_path: str) -> list:
                FROM subscriptions s
                JOIN users u ON u.id = s.user_id
                WHERE s.status = 'active'
-                 AND s.expires_at > datetime('now')
+                 AND datetime(s.expires_at) > datetime('now')
                ORDER BY s.expires_at ASC"""
+        ) as cursor:
+            return [dict(row) async for row in cursor]
+
+
+async def create_promo_code(db_path: str, code: str, days: int = 60) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            "INSERT OR IGNORE INTO promo_codes (code, days) VALUES (?, ?)",
+            (code, days),
+        )
+        await db.commit()
+
+
+async def get_promo_code(db_path: str, code: str) -> Optional[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM promo_codes WHERE code = ?", (code,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def use_promo_code(db_path: str, code: str, user_id: int) -> bool:
+    """Marks the code as used. Returns False if someone already used it."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            """UPDATE promo_codes SET is_used = 1, used_by = ?, used_at = ?
+               WHERE code = ? AND is_used = 0""",
+            (user_id, datetime.utcnow().isoformat(), code),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def get_all_promo_codes(db_path: str) -> list:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM promo_codes ORDER BY created_at DESC"
         ) as cursor:
             return [dict(row) async for row in cursor]
 
