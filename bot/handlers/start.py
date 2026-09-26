@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from aiogram import Router, Bot
 from aiogram.filters import CommandStart
 from aiogram.types import Message
@@ -58,10 +60,11 @@ async def cmd_start(message: Message, bot: Bot, config: Config, command: Command
 
     sub = await queries.get_active_subscription(config.db_path, user.id)
     if sub:
-        expires = sub["expires_at"][:10]
+        expires = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
         await message.answer(
             f"👋 Привет, {user.first_name}!\n\n"
-            f"Ваша подписка активна до {expires}."
+            f"Ваша подписка активна до {expires}.\n"
+            f"Продлить заранее: /pay"
         )
     else:
         link_part = f"\n\n{config.invite_link}" if config.invite_link else ""

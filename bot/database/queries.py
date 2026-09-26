@@ -180,7 +180,13 @@ async def get_subscriptions_expiring_soon(db_path: str, days: int) -> list:
                WHERE s.status = 'active'
                  AND s.in_grace = 0
                  AND datetime(s.expires_at) > datetime('now')
-                 AND datetime(s.expires_at) <= datetime(?)""",
+                 AND datetime(s.expires_at) <= datetime(?)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM subscriptions later
+                     WHERE later.user_id = s.user_id
+                       AND later.status = 'active'
+                       AND datetime(later.expires_at) > datetime(s.expires_at)
+                 )""",
             (cutoff,),
         ) as cursor:
             return [dict(row) async for row in cursor]

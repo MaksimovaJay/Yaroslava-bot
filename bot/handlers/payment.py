@@ -1,14 +1,36 @@
 import logging
+from datetime import datetime
 from aiogram import Router, Bot, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message
 
 from config import Config
 from database import queries
+from keyboards import plans_keyboard
 from services.subscription import create_subscription
 from services.payment.base import PaymentProvider
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+
+@router.message(Command("pay"))
+async def cmd_pay(message: Message, config: Config) -> None:
+    user = message.from_user
+    await queries.upsert_user(config.db_path, user.id, user.username, user.first_name)
+    if await queries.is_user_banned(config.db_path, user.id):
+        await message.answer("❌ Оплата недоступна.")
+        return
+    sub = await queries.get_active_subscription(config.db_path, user.id)
+    if sub:
+        expires = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
+        text = (
+            f"Ваша подписка активна до {expires}.\n"
+            f"Новый срок добавится к текущему — выберите тариф:"
+        )
+    else:
+        text = "Выберите тариф для оформления подписки:"
+    await message.answer(text, reply_markup=plans_keyboard(config, config.channel_id))
 
 
 @router.callback_query(F.data.startswith("plan:"))

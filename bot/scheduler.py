@@ -19,14 +19,12 @@ async def send_expiry_reminders(bot: Bot, config: Config) -> None:
     )
     for sub in expiring:
         expires_date = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
-        if sub.get("payment_token"):
-            tail = "Она продлится автоматически — ничего делать не нужно."
-        else:
-            tail = "В день окончания бот пришлёт кнопки для продления."
         try:
             await bot.send_message(
                 sub["user_id"],
-                f"⏰ Ваша подписка истекает {expires_date}.\n{tail}",
+                f"⏰ Ваша подписка истекает {expires_date}. "
+                f"Мы попробуем продлить её автоматически, а если не получится — "
+                f"пришлём кнопки для оплаты.",
             )
         except Exception as e:
             logger.warning("Could not send reminder to %s: %s", sub["user_id"], e)

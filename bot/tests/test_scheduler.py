@@ -120,3 +120,12 @@ async def test_failed_charge_offers_plan_buttons(db, config):
     markup = bot.send_message.call_args.kwargs["reply_markup"]
     callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
     assert callbacks == ["plan:1m:-100", "plan:2m:-100"]
+
+
+@pytest.mark.asyncio
+async def test_no_reminder_if_already_renewed(db, config):
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=2))
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=32))
+    bot = AsyncMock()
+    await send_expiry_reminders(bot, config)
+    bot.send_message.assert_not_called()

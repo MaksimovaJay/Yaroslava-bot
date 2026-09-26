@@ -12,7 +12,12 @@ async def create_subscription(
 ) -> dict:
     if days is None:
         days = config.PLAN_1M_DAYS if plan == "1m" else config.PLAN_2M_DAYS
-    expires_at = datetime.utcnow() + timedelta(days=days)
+    # Paying early must not burn the days left on the current subscription
+    base = datetime.utcnow()
+    current = await queries.get_active_subscription(db_path, user_id)
+    if current:
+        base = max(base, datetime.fromisoformat(current["expires_at"]))
+    expires_at = base + timedelta(days=days)
     sub_id = await queries.create_subscription(db_path, user_id, plan, expires_at)
     return {"id": sub_id, "expires_at": expires_at, "plan": plan}
 

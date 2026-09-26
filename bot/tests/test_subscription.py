@@ -72,3 +72,11 @@ def test_days_label():
     assert days_label(14) == "2 недели"
     assert days_label(60) == "2 месяца"
     assert days_label(30) == "1 месяц"
+
+
+@pytest.mark.asyncio
+async def test_paying_early_adds_to_current_subscription(db, config):
+    first = await create_subscription(db, 1, "1m", config)
+    second = await create_subscription(db, 1, "1m", config)
+    diff = (second["expires_at"] - first["expires_at"]).days
+    assert 29 <= diff <= 30
