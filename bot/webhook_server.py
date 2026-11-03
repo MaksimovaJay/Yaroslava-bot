@@ -1,3 +1,4 @@
+import json
 import logging
 from aiohttp import web
 from aiogram import Bot
@@ -6,6 +7,7 @@ from config import Config
 from database import queries
 from services.subscription import create_subscription
 from services.payment.yookassa import YooKassaPaymentProvider
+from services.tribute import verify_signature, handle_event
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +77,39 @@ async def handle_webhook(request: web.Request) -> web.Response:
     return web.Response(status=200)
 
 
+async def handle_tribute_webhook(request: web.Request) -> web.Response:
+    bot: Bot = request.app["bot"]
+    config: Config = request.app["config"]
+
+    if not config.tribute_api_key:
+        logger.warning("Tribute webhook received but TRIBUTE_API_KEY is not set")
+        return web.Response(status=503)
+
+    # The signature covers the exact bytes, so read them before parsing
+    body = await request.read()
+    if not verify_signature(body, request.headers.get("trbt-signature"), config.tribute_api_key):
+        logger.warning("Tribute webhook with invalid signature")
+        return web.Response(status=401)
+
+    try:
+        event = json.loads(body)
+    except ValueError:
+        return web.Response(status=400)
+
+    try:
+        await handle_event(event, bot, config)
+    except Exception:
+        # Non-2xx makes Tribute retry later
+        logger.exception("Failed to process Tribute event %s", event.get("name"))
+        return web.Response(status=500)
+    return web.Response(status=200)
+
+
 def create_webhook_app(bot: Bot, config: Config, payment) -> web.Application:
     app = web.Application()
     app["bot"] = bot
     app["config"] = config
     app["payment"] = payment
     app.router.add_post("/webhook", handle_webhook)
+    app.router.add_post("/tribute", handle_tribute_webhook)
     return app

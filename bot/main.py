@@ -36,6 +36,9 @@ async def main() -> None:
     elif config.use_stub_payments:
         payment = StubPaymentProvider()
         logger.warning("Using Stub payment provider — all payments are FREE")
+    elif config.tribute_enabled:
+        payment = None
+        logger.info("YooKassa disabled — selling through Tribute")
     else:
         raise RuntimeError(
             "YOOKASSA_SHOP_ID/YOOKASSA_SECRET_KEY не заданы. "
