@@ -40,6 +40,17 @@ def _is_admin(user_id: int, config: Config) -> bool:
     return user_id in config.admin_ids
 
 
+async def _all_subscribers(config: Config) -> tuple[list, list]:
+    """Legacy and Tribute subscribers, each row with a 'label' for the list."""
+    legacy = await queries.get_all_active_subscribers(config.db_path)
+    for sub in legacy:
+        sub["label"] = "1 мес" if sub["plan"] == "1m" else "2 мес"
+    tribute = await queries.get_all_active_tribute_subscribers(config.db_path)
+    for sub in tribute:
+        sub["label"] = "Tribute, отменена" if sub["status"] == "cancelled" else "Tribute"
+    return legacy, tribute
+
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, config: Config) -> None:
     if not _is_admin(message.from_user.id, config):
@@ -62,7 +73,7 @@ async def admin_stats(callback: CallbackQuery, config: Config) -> None:
     if not _is_admin(callback.from_user.id, config):
         return
     await callback.answer()
-    subs = await queries.get_all_active_subscribers(config.db_path)
+    legacy, tribute = await _all_subscribers(config)
     revenue = await queries.get_monthly_revenue(config.db_path)
     expiring = await queries.get_subscriptions_expiring_soon(
         config.db_path, config.REMINDER_DAYS_BEFORE
@@ -71,7 +82,8 @@ async def admin_stats(callback: CallbackQuery, config: Config) -> None:
     builder.button(text="◀️ Назад", callback_data="admin:back")
     await callback.message.edit_text(
         f"📊 Статистика\n\n"
-        f"Активных подписчиков: {len(subs)}\n"
+        f"Активных подписчиков: {len(legacy) + len(tribute)} "
+        f"(старые: {len(legacy)}, Tribute: {len(tribute)})\n"
         f"Выручка за месяц: {revenue} ₽\n"
         f"Истекает в ближайшие {config.REMINDER_DAYS_BEFORE} дня: {len(expiring)} чел.",
         reply_markup=builder.as_markup(),
@@ -84,7 +96,8 @@ async def admin_subscribers(callback: CallbackQuery, config: Config) -> None:
         return
     page = int(callback.data.split(":")[2])
     per_page = 10
-    all_subs = await queries.get_all_active_subscribers(config.db_path)
+    legacy, tribute = await _all_subscribers(config)
+    all_subs = sorted(legacy + tribute, key=lambda s: s["expires_at"])
     total = len(all_subs)
     subs = all_subs[page * per_page: (page + 1) * per_page]
 
@@ -97,9 +110,8 @@ async def admin_subscribers(callback: CallbackQuery, config: Config) -> None:
     for sub in subs:
         name = sub["first_name"]
         uname = f" @{sub['username']}" if sub.get("username") else ""
-        plan = "1 мес" if sub["plan"] == "1m" else "2 мес"
         exp = sub["expires_at"][:10]
-        lines.append(f"• {name}{uname} — {plan}, до {exp}")
+        lines.append(f"• {name}{uname} — {sub['label']}, до {exp}")
     text = "\n".join(lines)
 
     builder = InlineKeyboardBuilder()
@@ -148,8 +160,14 @@ async def admin_ban_execute(
         await kick_user(bot, config.channel_id, target_id)
     except Exception as e:
         logger.warning("Could not kick %s from channel: %s", target_id, e)
+    warning = ""
+    if await queries.get_active_tribute_subscription(config.db_path, target_id):
+        warning = (
+            "\n\n⚠️ У него активная подписка Tribute — отмените её в Tribute, "
+            "иначе списания продолжатся."
+        )
     await message.answer(
-        f"✅ Пользователь {target_id} заблокирован и удалён из канала.",
+        f"✅ Пользователь {target_id} заблокирован и удалён из канала.{warning}",
         reply_markup=_admin_keyboard(),
     )
 
