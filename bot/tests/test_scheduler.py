@@ -30,6 +30,8 @@ def config(db):
     c.PLAN_2M_DAYS = 60
     c.GRACE_PERIOD_DAYS = 3
     c.REMINDER_DAYS_BEFORE = 3
+    c.tribute_enabled = False
+    c.tribute_subscribe_link = ""
     return c
 
 
@@ -129,3 +131,82 @@ async def test_no_reminder_if_already_renewed(db, config):
     bot = AsyncMock()
     await send_expiry_reminders(bot, config)
     bot.send_message.assert_not_called()
+
+
+LINK = "https://t.me/tribute/app?startapp=abc"
+
+
+def _enable_tribute(config):
+    config.tribute_enabled = True
+    config.tribute_subscribe_link = LINK
+
+
+async def _tribute_sub(db, user_id=100):
+    now = datetime.utcnow()
+    await queries.upsert_tribute_subscription(
+        db, user_id, 1, 2, "active", now + timedelta(days=30), now
+    )
+
+
+def _urls(markup):
+    return [b.url for row in markup.inline_keyboard for b in row]
+
+
+@pytest.mark.asyncio
+async def test_no_reminder_if_user_moved_to_tribute(db, config):
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=2))
+    await _tribute_sub(db)
+    bot = AsyncMock()
+    await send_expiry_reminders(bot, config)
+    bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reminder_links_to_tribute_when_enabled(db, config):
+    _enable_tribute(config)
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=2))
+    bot = AsyncMock()
+    await send_expiry_reminders(bot, config)
+    assert _urls(bot.send_message.call_args.kwargs["reply_markup"]) == [LINK]
+
+
+@pytest.mark.asyncio
+async def test_expired_legacy_not_charged_when_tribute_enabled(db, config):
+    _enable_tribute(config)
+    sub_id = await queries.create_subscription(
+        db, 100, "1m", datetime.utcnow() - timedelta(hours=1)
+    )
+    bot = AsyncMock()
+    payment = AsyncMock()
+    await process_expired_subscriptions(bot, config, payment)
+    payment.charge_saved.assert_not_called()
+    async with aiosqlite.connect(db) as conn:
+        async with conn.execute("SELECT in_grace FROM subscriptions WHERE id = ?", (sub_id,)) as cur:
+            assert (await cur.fetchone())[0] == 1
+    assert _urls(bot.send_message.call_args.kwargs["reply_markup"]) == [LINK]
+
+
+@pytest.mark.asyncio
+async def test_expired_legacy_with_tribute_is_closed_silently(db, config):
+    sub_id = await queries.create_subscription(
+        db, 100, "1m", datetime.utcnow() - timedelta(hours=1)
+    )
+    await _tribute_sub(db)
+    bot = AsyncMock()
+    await process_expired_subscriptions(bot, config, AsyncMock())
+    bot.send_message.assert_not_called()
+    async with aiosqlite.connect(db) as conn:
+        async with conn.execute("SELECT status FROM subscriptions WHERE id = ?", (sub_id,)) as cur:
+            assert (await cur.fetchone())[0] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_grace_end_does_not_kick_tribute_subscriber(db, config):
+    sub_id = await queries.create_subscription(
+        db, 100, "1m", datetime.utcnow() - timedelta(days=4)
+    )
+    await queries.start_grace_period(db, sub_id, datetime.utcnow() - timedelta(hours=1))
+    await _tribute_sub(db)
+    bot = AsyncMock()
+    await process_grace_period_ended(bot, config)
+    bot.ban_chat_member.assert_not_called()

@@ -8,9 +8,13 @@ from config import Config
 from database import queries
 from services.subscription import renew_subscription, kick_user
 from services.payment.base import PaymentProvider
-from keyboards import plans_keyboard
+from keyboards import sales_keyboard, tribute_keyboard
 
 logger = logging.getLogger(__name__)
+
+
+async def _moved_to_tribute(config: Config, user_id: int) -> bool:
+    return bool(await queries.get_active_tribute_subscription(config.db_path, user_id))
 
 
 async def send_expiry_reminders(bot: Bot, config: Config) -> None:
@@ -18,14 +22,24 @@ async def send_expiry_reminders(bot: Bot, config: Config) -> None:
         config.db_path, config.REMINDER_DAYS_BEFORE
     )
     for sub in expiring:
+        if await _moved_to_tribute(config, sub["user_id"]):
+            continue
         expires_date = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
-        try:
-            await bot.send_message(
-                sub["user_id"],
+        if config.tribute_enabled:
+            text = (
+                f"⏰ Ваша подписка заканчивается {expires_date}. "
+                f"Продлить можно через Tribute 👇"
+            )
+            markup = tribute_keyboard(config)
+        else:
+            text = (
                 f"⏰ Ваша подписка истекает {expires_date}. "
                 f"Мы попробуем продлить её автоматически, а если не получится — "
-                f"пришлём кнопки для оплаты.",
+                f"пришлём кнопки для оплаты."
             )
+            markup = None
+        try:
+            await bot.send_message(sub["user_id"], text, reply_markup=markup)
         except Exception as e:
             logger.warning("Could not send reminder to %s: %s", sub["user_id"], e)
 
@@ -36,16 +50,21 @@ async def process_expired_subscriptions(
     expired = await queries.get_expired_subscriptions(config.db_path)
     for sub in expired:
         # User already bought a new subscription — just close the old one
-        if await queries.get_active_subscription(config.db_path, sub["user_id"]):
+        if await queries.get_active_subscription(
+            config.db_path, sub["user_id"]
+        ) or await _moved_to_tribute(config, sub["user_id"]):
             await queries.expire_subscription(config.db_path, sub["id"])
             continue
         amount = (
             config.PLAN_1M_PRICE if sub["plan"] == "1m" else config.PLAN_2M_PRICE
         )
-        result = await payment.charge_saved(
-            sub["user_id"], sub.get("payment_token"), amount
-        )
-        if result.success:
+        # With Tribute on, old subscriptions just run out — no YooKassa charge
+        result = None
+        if not config.tribute_enabled:
+            result = await payment.charge_saved(
+                sub["user_id"], sub.get("payment_token"), amount
+            )
+        if result and result.success:
             new_expires = await renew_subscription(config.db_path, sub, config)
             record_id = await queries.create_payment(
                 config.db_path, sub["user_id"], amount, sub["plan"]
@@ -63,13 +82,20 @@ async def process_expired_subscriptions(
         else:
             grace_ends_at = datetime.utcnow() + timedelta(days=config.GRACE_PERIOD_DAYS)
             await queries.start_grace_period(config.db_path, sub["id"], grace_ends_at)
+            reason = (
+                "" if config.tribute_enabled
+                else ", автоматически продлить её не удалось"
+            )
+            action = (
+                "оформите подписку через Tribute 👇" if config.tribute_enabled
+                else "выберите тариф, чтобы продлить:"
+            )
             try:
                 await bot.send_message(
                     sub["user_id"],
-                    f"⚠️ Срок подписки закончился, автоматически продлить её не удалось.\n"
-                    f"Доступ сохранится ещё {config.GRACE_PERIOD_DAYS} дня — "
-                    f"выберите тариф, чтобы продлить:",
-                    reply_markup=plans_keyboard(config, config.channel_id),
+                    f"⚠️ Срок подписки закончился{reason}.\n"
+                    f"Доступ сохранится ещё {config.GRACE_PERIOD_DAYS} дня — {action}",
+                    reply_markup=sales_keyboard(config, config.channel_id),
                 )
             except Exception as e:
                 logger.warning("Could not notify %s: %s", sub["user_id"], e)
@@ -81,7 +107,11 @@ async def process_grace_period_ended(bot: Bot, config: Config) -> None:
         paid_again = await queries.get_active_subscription(
             config.db_path, sub["user_id"]
         )
-        if sub["user_id"] in config.admin_ids or paid_again:
+        if (
+            sub["user_id"] in config.admin_ids
+            or paid_again
+            or await _moved_to_tribute(config, sub["user_id"])
+        ):
             await queries.expire_subscription(config.db_path, sub["id"])
             continue
         try:
@@ -90,11 +120,19 @@ async def process_grace_period_ended(bot: Bot, config: Config) -> None:
             logger.warning("Could not kick %s: %s", sub["user_id"], e)
         await queries.expire_subscription(config.db_path, sub["id"])
         try:
-            await bot.send_message(
-                sub["user_id"],
-                "❌ Подписка истекла, доступ к каналу закрыт.\n"
-                "Чтобы подписаться снова — перейдите по ссылке на канал.",
-            )
+            if config.tribute_enabled:
+                await bot.send_message(
+                    sub["user_id"],
+                    "❌ Подписка истекла, доступ к группе закрыт.\n"
+                    "Чтобы вернуться — оформите подписку через Tribute 👇",
+                    reply_markup=tribute_keyboard(config),
+                )
+            else:
+                await bot.send_message(
+                    sub["user_id"],
+                    "❌ Подписка истекла, доступ к каналу закрыт.\n"
+                    "Чтобы подписаться снова — перейдите по ссылке на канал.",
+                )
         except Exception as e:
             logger.warning("Could not notify %s: %s", sub["user_id"], e)
 
