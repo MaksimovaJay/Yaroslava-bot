@@ -12,6 +12,8 @@ class Config:
     yookassa_shop_id: str = ""
     yookassa_secret_key: str = ""
     use_stub_payments: bool = False
+    tribute_api_key: str = ""
+    tribute_subscribe_link: str = ""
 
     PLAN_1M_PRICE: int = field(default=500, init=False)
     PLAN_2M_PRICE: int = field(default=900, init=False)
@@ -21,6 +23,11 @@ class Config:
     TRIAL_DAYS: int = field(default=14, init=False)
     GRACE_PERIOD_DAYS: int = field(default=3, init=False)
     REMINDER_DAYS_BEFORE: int = field(default=3, init=False)
+
+    @property
+    def tribute_enabled(self) -> bool:
+        # Selling switches to Tribute as soon as the subscription link is set
+        return bool(self.tribute_subscribe_link)
 
 
 def load_config() -> Config:
@@ -37,4 +44,6 @@ def load_config() -> Config:
         yookassa_shop_id=os.environ.get("YOOKASSA_SHOP_ID", ""),
         yookassa_secret_key=os.environ.get("YOOKASSA_SECRET_KEY", ""),
         use_stub_payments=os.environ.get("PAYMENT_STUB", "") == "1",
+        tribute_api_key=os.environ.get("TRIBUTE_API_KEY", ""),
+        tribute_subscribe_link=os.environ.get("TRIBUTE_SUBSCRIBE_LINK", ""),
     )

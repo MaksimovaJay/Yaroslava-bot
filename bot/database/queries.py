@@ -287,4 +287,110 @@ async def get_monthly_revenue(db_path: str) -> int:
                  AND created_at >= datetime('now', 'start of month')"""
         ) as cursor:
             row = await cursor.fetchone()
-            return row[0] if row else 0
+            own = row[0] if row else 0
+        # Tribute amounts are in kopecks and already net of its commission
+        async with db.execute(
+            """SELECT COALESCE(SUM(amount), 0)
+               FROM tribute_events
+               WHERE name IN ('new_subscription', 'renewed_subscription')
+                 AND lower(currency) = 'rub'
+                 AND received_at >= datetime('now', 'start of month')"""
+        ) as cursor:
+            row = await cursor.fetchone()
+            tribute = row[0] if row else 0
+        return own + tribute // 100
+
+
+async def ensure_user(
+    db_path: str, user_id: int, username: Optional[str], fallback_name: str
+) -> None:
+    """Creates the user if missing; never overwrites a real first name."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """INSERT INTO users (id, username, first_name) VALUES (?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 username = COALESCE(excluded.username, users.username)""",
+            (user_id, username, fallback_name),
+        )
+        await db.commit()
+
+
+async def record_tribute_event(
+    db_path: str,
+    name: str,
+    user_id: int,
+    event_created_at: str,
+    amount: Optional[int],
+    currency: Optional[str],
+) -> bool:
+    """Returns False if this event was already received."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            """INSERT OR IGNORE INTO tribute_events
+                 (name, user_id, event_created_at, amount, currency)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, user_id, event_created_at, amount, currency),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def upsert_tribute_subscription(
+    db_path: str,
+    user_id: int,
+    subscription_id: int,
+    period_id: int,
+    status: str,
+    expires_at: datetime,
+    event_at: datetime,
+) -> None:
+    """Skips events older than the last applied one (retries come out of order)."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """INSERT INTO tribute_subscriptions
+                 (user_id, subscription_id, period_id, status, expires_at, last_event_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 subscription_id = excluded.subscription_id,
+                 period_id = excluded.period_id,
+                 status = excluded.status,
+                 expires_at = excluded.expires_at,
+                 last_event_at = excluded.last_event_at
+               WHERE datetime(excluded.last_event_at)
+                     >= datetime(tribute_subscriptions.last_event_at)""",
+            (
+                user_id, subscription_id, period_id, status,
+                expires_at.isoformat(), event_at.isoformat(),
+            ),
+        )
+        await db.commit()
+
+
+async def get_active_tribute_subscription(
+    db_path: str, user_id: int
+) -> Optional[dict]:
+    """A cancelled Tribute subscription still gives access until expires_at."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM tribute_subscriptions
+               WHERE user_id = ? AND datetime(expires_at) > datetime('now')""",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_all_active_tribute_subscribers(db_path: str) -> list:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT t.*, u.first_name, u.username
+               FROM tribute_subscriptions t
+               JOIN users u ON u.id = t.user_id
+               WHERE datetime(t.expires_at) > datetime('now')
+               ORDER BY t.expires_at ASC"""
+        ) as cursor:
+            return [dict(row) async for row in cursor]

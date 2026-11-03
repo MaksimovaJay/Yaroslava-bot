@@ -52,6 +52,33 @@ CREATE TABLE IF NOT EXISTS promo_codes (
 """
 
 
+# One row per user: Tribute keeps a single subscription per channel
+_CREATE_TRIBUTE_SUBSCRIPTIONS = """
+CREATE TABLE IF NOT EXISTS tribute_subscriptions (
+    user_id         INTEGER PRIMARY KEY REFERENCES users(id),
+    subscription_id INTEGER,
+    period_id       INTEGER,
+    status          TEXT NOT NULL CHECK(status IN ('active', 'cancelled')),
+    expires_at      DATETIME NOT NULL,
+    last_event_at   DATETIME NOT NULL
+)
+"""
+
+# Tribute retries webhooks for ~24h, the unique key drops repeats
+_CREATE_TRIBUTE_EVENTS = """
+CREATE TABLE IF NOT EXISTS tribute_events (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT NOT NULL,
+    user_id          INTEGER NOT NULL,
+    event_created_at TEXT NOT NULL,
+    amount           INTEGER,
+    currency         TEXT,
+    received_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(name, user_id, event_created_at)
+)
+"""
+
+
 async def _add_column_if_missing(db, table: str, column: str, ddl: str) -> None:
     async with db.execute(f"PRAGMA table_info({table})") as cursor:
         columns = {row[1] async for row in cursor}
@@ -67,6 +94,8 @@ async def init_db(db_path: str) -> None:
         await db.execute(_CREATE_SUBSCRIPTIONS)
         await db.execute(_CREATE_PAYMENTS)
         await db.execute(_CREATE_PROMO_CODES)
+        await db.execute(_CREATE_TRIBUTE_SUBSCRIPTIONS)
+        await db.execute(_CREATE_TRIBUTE_EVENTS)
         await _add_column_if_missing(
             db, "promo_codes", "days", "INTEGER NOT NULL DEFAULT 60"
         )
