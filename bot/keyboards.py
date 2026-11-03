@@ -16,3 +16,15 @@ def plans_keyboard(config: Config, channel_id: int) -> InlineKeyboardMarkup:
     )
     builder.adjust(1)
     return builder.as_markup()
+
+
+def tribute_keyboard(config: Config) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💳 Оформить подписку", url=config.tribute_subscribe_link)
+    return builder.as_markup()
+
+
+def sales_keyboard(config: Config, channel_id: int) -> InlineKeyboardMarkup:
+    if config.tribute_enabled:
+        return tribute_keyboard(config)
+    return plans_keyboard(config, channel_id)

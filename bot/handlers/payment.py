@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from config import Config
 from database import queries
-from keyboards import plans_keyboard
+from keyboards import plans_keyboard, tribute_keyboard
 from services.subscription import create_subscription
 from services.payment.base import PaymentProvider
 
@@ -20,6 +20,20 @@ async def cmd_pay(message: Message, config: Config) -> None:
     await queries.upsert_user(config.db_path, user.id, user.username, user.first_name)
     if await queries.is_user_banned(config.db_path, user.id):
         await message.answer("❌ Оплата недоступна.")
+        return
+    if config.tribute_enabled:
+        tribute_sub = await queries.get_active_tribute_subscription(config.db_path, user.id)
+        if tribute_sub:
+            expires = datetime.fromisoformat(tribute_sub["expires_at"]).strftime("%d.%m.%Y")
+            await message.answer(
+                f"Ваша подписка активна до {expires}.\n"
+                f"Управлять подпиской можно в @tribute."
+            )
+            return
+        await message.answer(
+            "Подписка оформляется через Tribute 👇",
+            reply_markup=tribute_keyboard(config),
+        )
         return
     sub = await queries.get_active_subscription(config.db_path, user.id)
     if sub:
@@ -43,6 +57,14 @@ async def handle_plan_selection(
     _, plan, channel_id_str = callback.data.split(":")
     if plan not in ("1m", "2m"):
         await callback.answer()
+        return
+    # Plan buttons in old messages must not start a YooKassa payment anymore
+    if config.tribute_enabled:
+        await callback.answer()
+        await callback.message.edit_text(
+            "Оплата теперь через Tribute 👇",
+            reply_markup=tribute_keyboard(config),
+        )
         return
     channel_id = int(channel_id_str)
     user = callback.from_user

@@ -8,6 +8,7 @@ from aiogram.filters import CommandObject
 from config import Config
 from database import queries
 from services.subscription import create_subscription, days_label
+from keyboards import tribute_keyboard
 
 router = Router()
 
@@ -65,6 +66,23 @@ async def cmd_start(message: Message, bot: Bot, config: Config, command: Command
             f"👋 Привет, {user.first_name}!\n\n"
             f"Ваша подписка активна до {expires}.\n"
             f"Продлить заранее: /pay"
+        )
+        return
+
+    tribute_sub = await queries.get_active_tribute_subscription(config.db_path, user.id)
+    if tribute_sub:
+        expires = datetime.fromisoformat(tribute_sub["expires_at"]).strftime("%d.%m.%Y")
+        await message.answer(
+            f"👋 Привет, {user.first_name}!\n\n"
+            f"Ваша подписка активна до {expires}.\n"
+            f"Управлять подпиской можно в @tribute."
+        )
+    elif config.tribute_enabled:
+        await message.answer(
+            f"👋 Привет, {user.first_name}!\n\n"
+            f"Это закрытая группа «Журнал Психоголика». "
+            f"Оформите подписку, и доступ откроется сразу после оплаты 👇",
+            reply_markup=tribute_keyboard(config),
         )
     else:
         link_part = f"\n\n{config.invite_link}" if config.invite_link else ""

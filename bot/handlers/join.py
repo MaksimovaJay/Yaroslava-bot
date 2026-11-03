@@ -45,6 +45,12 @@ async def handle_join_request(
         await request.approve()
         return
 
+    # Tribute's bot is also an admin and handles requests of its buyers
+    if config.tribute_enabled or await queries.get_active_tribute_subscription(
+        config.db_path, user.id
+    ):
+        return
+
     try:
         await bot.send_message(
             user.id,
@@ -54,7 +60,7 @@ async def handle_join_request(
             reply_markup=plans_keyboard(config, channel_id),
         )
     except Exception:
+        # Declining here would also reject people who paid through Tribute
         logger.warning(
             "Cannot send DM to user %s — they haven't started the bot", user.id
         )
-        await request.decline()
