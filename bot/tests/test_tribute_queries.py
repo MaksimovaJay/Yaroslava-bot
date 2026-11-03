@@ -82,9 +82,10 @@ async def test_monthly_revenue_includes_tribute(db):
     assert await queries.get_monthly_revenue(db) == 1000
 
 
-def test_tribute_enabled_follows_link():
+def test_tribute_needs_key_too():
     base = dict(bot_token="t", admin_ids=frozenset({1}), channel_id=-100, db_path="x")
-    assert Config(**base, tribute_subscribe_link="").tribute_enabled is False
+    link = "https://t.me/tribute/app?startapp=x"
+    assert Config(**base, tribute_subscribe_link=link).tribute_enabled is False
     assert Config(
-        **base, tribute_subscribe_link="https://t.me/tribute/app?startapp=x"
+        **base, tribute_subscribe_link=link, tribute_api_key="k"
     ).tribute_enabled is True

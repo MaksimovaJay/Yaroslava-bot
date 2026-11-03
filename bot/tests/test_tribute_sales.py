@@ -17,7 +17,7 @@ async def config(tmp_path):
     await init_db(path)
     return Config(
         bot_token="t", admin_ids=frozenset({1}), channel_id=-100,
-        db_path=path, tribute_subscribe_link=LINK,
+        db_path=path, tribute_subscribe_link=LINK, tribute_api_key="k",
     )
 
 
@@ -134,3 +134,28 @@ async def test_start_shows_tribute_expiry(config):
     msg = _message()
     await cmd_start(msg, AsyncMock(), config, None)
     assert "@tribute" in msg.answer.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_pay_tells_legacy_subscriber_to_wait(config):
+    config.tribute_api_key = "k"
+    await queries.upsert_user(config.db_path, 5, "u", "U")
+    expires = datetime.utcnow() + timedelta(days=40)
+    await queries.create_subscription(config.db_path, 5, "1m", expires)
+    msg = _message()
+    await cmd_pay(msg, config)
+    text = msg.answer.call_args.args[0]
+    assert expires.strftime("%d.%m.%Y") in text
+    assert "reply_markup" not in msg.answer.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_start_legacy_does_not_offer_early_renewal_with_tribute(config):
+    config.tribute_api_key = "k"
+    await queries.upsert_user(config.db_path, 5, "u", "U")
+    await queries.create_subscription(
+        config.db_path, 5, "1m", datetime.utcnow() + timedelta(days=40)
+    )
+    msg = _message()
+    await cmd_start(msg, AsyncMock(), config, None)
+    assert "/pay" not in msg.answer.call_args.args[0]

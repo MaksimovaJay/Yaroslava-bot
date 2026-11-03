@@ -26,8 +26,9 @@ class Config:
 
     @property
     def tribute_enabled(self) -> bool:
-        # Selling switches to Tribute as soon as the subscription link is set
-        return bool(self.tribute_subscribe_link)
+        # Without the key every webhook is rejected and we'd never learn who
+        # paid, so the link alone must not switch selling to Tribute
+        return bool(self.tribute_subscribe_link and self.tribute_api_key)
 
 
 def load_config() -> Config:

@@ -27,6 +27,12 @@ async def main() -> None:
     config = load_config()
     await init_db(config.db_path)
 
+    if config.tribute_subscribe_link and not config.tribute_api_key:
+        logger.error(
+            "TRIBUTE_SUBSCRIBE_LINK is set but TRIBUTE_API_KEY is not — "
+            "Tribute stays OFF until both are set"
+        )
+
     bot = Bot(token=config.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
 
