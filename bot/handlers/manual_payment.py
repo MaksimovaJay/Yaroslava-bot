@@ -159,7 +159,7 @@ async def receive_screenshot(message: Message, bot: Bot, config: Config) -> None
             # The screenshot already went out — asking first could leave it stuck
             await message.answer(
                 "✅ Скриншот получили!\n\n"
-                f"Напишите, пожалуйста, одним сообщением {PAYER_HINTS[payment["method"]]} — "
+                f"Напишите, пожалуйста, одним сообщением {PAYER_HINTS[payment['method']]} — "
                 "так мы быстрее найдём ваш платёж."
             )
     else:
