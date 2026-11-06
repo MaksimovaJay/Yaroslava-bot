@@ -27,7 +27,7 @@ async def cmd_pay(message: Message, config: Config) -> None:
             expires = datetime.fromisoformat(legacy["expires_at"]).strftime("%d.%m.%Y")
             await message.answer(
                 f"Ваша подписка уже оплачена до {expires} — сейчас ничего платить не нужно.\n"
-                f"Ближе к концу срока пришлём ссылку для продления."
+                f"В день окончания срока пришлём ссылку для продления."
             )
             return
         tribute_sub = await queries.get_active_tribute_subscription(config.db_path, user.id)

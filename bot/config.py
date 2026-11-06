@@ -14,6 +14,7 @@ class Config:
     use_stub_payments: bool = False
     tribute_api_key: str = ""
     tribute_subscribe_link: str = ""
+    tribute_promo_code: str = ""
 
     PLAN_1M_PRICE: int = field(default=500, init=False)
     PLAN_2M_PRICE: int = field(default=900, init=False)
@@ -26,9 +27,8 @@ class Config:
 
     @property
     def tribute_enabled(self) -> bool:
-        # Without the key every webhook is rejected and we'd never learn who
-        # paid, so the link alone must not switch selling to Tribute
-        return bool(self.tribute_subscribe_link and self.tribute_api_key)
+        # Tribute refused us API access, so the key (webhooks) is optional
+        return bool(self.tribute_subscribe_link)
 
 
 def load_config() -> Config:
@@ -47,4 +47,5 @@ def load_config() -> Config:
         use_stub_payments=os.environ.get("PAYMENT_STUB", "") == "1",
         tribute_api_key=os.environ.get("TRIBUTE_API_KEY", ""),
         tribute_subscribe_link=os.environ.get("TRIBUTE_SUBSCRIBE_LINK", ""),
+        tribute_promo_code=os.environ.get("TRIBUTE_PROMO_CODE", ""),
     )

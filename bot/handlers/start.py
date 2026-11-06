@@ -64,7 +64,7 @@ async def cmd_start(message: Message, bot: Bot, config: Config, command: Command
         expires = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
         # Tribute starts its period at payment, so renewing early would waste paid days
         hint = (
-            "Ближе к концу срока пришлём ссылку для продления."
+            "В день окончания срока пришлём ссылку для продления."
             if config.tribute_enabled else "Продлить заранее: /pay"
         )
         await message.answer(

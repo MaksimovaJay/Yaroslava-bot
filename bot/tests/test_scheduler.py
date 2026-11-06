@@ -32,6 +32,8 @@ def config(db):
     c.REMINDER_DAYS_BEFORE = 3
     c.tribute_enabled = False
     c.tribute_subscribe_link = ""
+    c.tribute_promo_code = ""
+    c.admin_ids = frozenset()
     return c
 
 
@@ -162,16 +164,23 @@ async def test_no_reminder_if_user_moved_to_tribute(db, config):
 
 
 @pytest.mark.asyncio
-async def test_reminder_links_to_tribute_when_enabled(db, config):
+async def test_reminder_promises_link_on_expiry_day(db, config):
+    # Tribute counts a month from payment, so an early link would burn paid days
     _enable_tribute(config)
-    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=2))
+    expires = datetime.utcnow() + timedelta(days=2)
+    await queries.create_subscription(db, 100, "1m", expires)
     bot = AsyncMock()
     await send_expiry_reminders(bot, config)
-    assert _urls(bot.send_message.call_args.kwargs["reply_markup"]) == [LINK]
+    text = bot.send_message.call_args.args[1]
+    assert expires.strftime("%d.%m.%Y") in text
+    assert LINK not in text
+    assert bot.send_message.call_args.kwargs.get("reply_markup") is None
 
 
 @pytest.mark.asyncio
-async def test_expired_legacy_not_charged_when_tribute_enabled(db, config):
+async def test_expired_legacy_is_removed_and_gets_link_when_tribute_enabled(db, config):
+    # Without Tribute webhooks a grace period could kick someone who already paid,
+    # so the link is sent only together with the removal
     _enable_tribute(config)
     sub_id = await queries.create_subscription(
         db, 100, "1m", datetime.utcnow() - timedelta(hours=1)
@@ -180,10 +189,34 @@ async def test_expired_legacy_not_charged_when_tribute_enabled(db, config):
     payment = AsyncMock()
     await process_expired_subscriptions(bot, config, payment)
     payment.charge_saved.assert_not_called()
+    bot.ban_chat_member.assert_called_once_with(-100, 100)
+    bot.unban_chat_member.assert_called_once_with(-100, 100)
     async with aiosqlite.connect(db) as conn:
-        async with conn.execute("SELECT in_grace FROM subscriptions WHERE id = ?", (sub_id,)) as cur:
-            assert (await cur.fetchone())[0] == 1
+        async with conn.execute(
+            "SELECT status, in_grace FROM subscriptions WHERE id = ?", (sub_id,)
+        ) as cur:
+            assert tuple(await cur.fetchone()) == ("expired", 0)
     assert _urls(bot.send_message.call_args.kwargs["reply_markup"]) == [LINK]
+
+
+@pytest.mark.asyncio
+async def test_expired_admin_not_removed_when_tribute_enabled(db, config):
+    _enable_tribute(config)
+    config.admin_ids = frozenset({100})
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() - timedelta(hours=1))
+    bot = AsyncMock()
+    await process_expired_subscriptions(bot, config, AsyncMock())
+    bot.ban_chat_member.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_expiry_message_includes_promo_code(db, config):
+    _enable_tribute(config)
+    config.tribute_promo_code = "STARYI500"
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() - timedelta(hours=1))
+    bot = AsyncMock()
+    await process_expired_subscriptions(bot, config, AsyncMock())
+    assert "STARYI500" in bot.send_message.call_args.args[1]
 
 
 @pytest.mark.asyncio

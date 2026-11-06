@@ -26,11 +26,12 @@ async def send_expiry_reminders(bot: Bot, config: Config) -> None:
             continue
         expires_date = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
         if config.tribute_enabled:
+            # Tribute counts a month from payment, so an early link burns paid days
             text = (
                 f"⏰ Ваша подписка заканчивается {expires_date}. "
-                f"Продлить можно через Tribute 👇"
+                f"В этот день пришлём ссылку для продления."
             )
-            markup = tribute_keyboard(config)
+            markup = None
         else:
             text = (
                 f"⏰ Ваша подписка истекает {expires_date}. "
@@ -55,16 +56,16 @@ async def process_expired_subscriptions(
         ) or await _moved_to_tribute(config, sub["user_id"]):
             await queries.expire_subscription(config.db_path, sub["id"])
             continue
+        if config.tribute_enabled:
+            await _hand_over_to_tribute(bot, config, sub)
+            continue
         amount = (
             config.PLAN_1M_PRICE if sub["plan"] == "1m" else config.PLAN_2M_PRICE
         )
-        # With Tribute on, old subscriptions just run out — no YooKassa charge
-        result = None
-        if not config.tribute_enabled:
-            result = await payment.charge_saved(
-                sub["user_id"], sub.get("payment_token"), amount
-            )
-        if result and result.success:
+        result = await payment.charge_saved(
+            sub["user_id"], sub.get("payment_token"), amount
+        )
+        if result.success:
             new_expires = await renew_subscription(config.db_path, sub, config)
             record_id = await queries.create_payment(
                 config.db_path, sub["user_id"], amount, sub["plan"]
@@ -82,23 +83,42 @@ async def process_expired_subscriptions(
         else:
             grace_ends_at = datetime.utcnow() + timedelta(days=config.GRACE_PERIOD_DAYS)
             await queries.start_grace_period(config.db_path, sub["id"], grace_ends_at)
-            reason = (
-                "" if config.tribute_enabled
-                else ", автоматически продлить её не удалось"
-            )
-            action = (
-                "оформите подписку через Tribute 👇" if config.tribute_enabled
-                else "выберите тариф, чтобы продлить:"
-            )
             try:
                 await bot.send_message(
                     sub["user_id"],
-                    f"⚠️ Срок подписки закончился{reason}.\n"
-                    f"Доступ сохранится ещё {config.GRACE_PERIOD_DAYS} дня — {action}",
+                    f"⚠️ Срок подписки закончился, автоматически продлить её не удалось.\n"
+                    f"Доступ сохранится ещё {config.GRACE_PERIOD_DAYS} дня — "
+                    f"выберите тариф, чтобы продлить:",
                     reply_markup=sales_keyboard(config, config.channel_id),
                 )
             except Exception as e:
                 logger.warning("Could not notify %s: %s", sub["user_id"], e)
+
+
+async def _hand_over_to_tribute(bot: Bot, config: Config, sub: dict) -> None:
+    # No grace period: without webhooks we can't see who paid in Tribute during
+    # it, so the link goes out only together with the removal. Tribute lets the
+    # person back in after payment.
+    if sub["user_id"] not in config.admin_ids:
+        try:
+            await kick_user(bot, config.channel_id, sub["user_id"])
+        except Exception as e:
+            logger.warning("Could not kick %s: %s", sub["user_id"], e)
+    await queries.expire_subscription(config.db_path, sub["id"])
+    promo = (
+        f"\nПромокод для вас: {config.tribute_promo_code}"
+        if config.tribute_promo_code else ""
+    )
+    try:
+        await bot.send_message(
+            sub["user_id"],
+            "Срок вашей подписки закончился.\n"
+            "Подписка теперь оформляется через Tribute: после оплаты "
+            f"доступ к группе откроется снова 👇{promo}",
+            reply_markup=tribute_keyboard(config),
+        )
+    except Exception as e:
+        logger.warning("Could not notify %s: %s", sub["user_id"], e)
 
 
 async def process_grace_period_ended(bot: Bot, config: Config) -> None:

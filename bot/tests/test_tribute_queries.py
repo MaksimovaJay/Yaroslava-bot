@@ -82,10 +82,9 @@ async def test_monthly_revenue_includes_tribute(db):
     assert await queries.get_monthly_revenue(db) == 1000
 
 
-def test_tribute_needs_key_too():
+def test_tribute_link_alone_enables_it():
+    # Tribute refused API access, so selling must work without a key
     base = dict(bot_token="t", admin_ids=frozenset({1}), channel_id=-100, db_path="x")
     link = "https://t.me/tribute/app?startapp=x"
-    assert Config(**base, tribute_subscribe_link=link).tribute_enabled is False
-    assert Config(
-        **base, tribute_subscribe_link=link, tribute_api_key="k"
-    ).tribute_enabled is True
+    assert Config(**base).tribute_enabled is False
+    assert Config(**base, tribute_subscribe_link=link).tribute_enabled is True
