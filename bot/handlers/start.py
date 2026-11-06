@@ -8,6 +8,8 @@ from aiogram.filters import CommandObject
 from config import Config
 from database import queries
 from services.subscription import create_subscription, days_label
+from services.pricing import offer_text
+from keyboards import payment_keyboard
 
 router = Router()
 
@@ -64,12 +66,14 @@ async def cmd_start(message: Message, bot: Bot, config: Config, command: Command
         await message.answer(
             f"👋 Привет, {user.first_name}!\n\n"
             f"Ваша подписка активна до {expires}.\n"
-            f"Продлить заранее: /pay"
+            f"Продлить заранее: /pay\n"
+            f"Вопросы и помощь: /help"
         )
     else:
-        link_part = f"\n\n{config.invite_link}" if config.invite_link else ""
         await message.answer(
             f"👋 Привет, {user.first_name}!\n\n"
-            f"Чтобы получить доступ к группе — перейдите по ссылке и подайте заявку на вступление."
-            f"{link_part}"
+            f"Это закрытая группа «Журнал Психоголика». "
+            f"После оплаты доступ откроется.\n\n"
+            f"{await offer_text(config, user.id)}",
+            reply_markup=payment_keyboard(config, config.channel_id),
         )

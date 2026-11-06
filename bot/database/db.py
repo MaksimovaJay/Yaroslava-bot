@@ -51,6 +51,25 @@ CREATE TABLE IF NOT EXISTS promo_codes (
 )
 """
 
+_CREATE_MANUAL_PAYMENTS = """
+CREATE TABLE IF NOT EXISTS manual_payments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id),
+    method          TEXT NOT NULL CHECK(method IN ('mbank', 'getcourse')),
+    amount          INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'awaiting_screenshot'
+                    CHECK(status IN ('awaiting_screenshot', 'awaiting_review',
+                                     'approved', 'rejected', 'abandoned')),
+    file_id         TEXT,
+    file_kind       TEXT CHECK(file_kind IN ('photo', 'document')),
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    submitted_at    DATETIME,
+    resent_at       DATETIME,
+    reviewed_by     INTEGER,
+    reviewed_at     DATETIME
+)
+"""
+
 
 async def _add_column_if_missing(db, table: str, column: str, ddl: str) -> None:
     async with db.execute(f"PRAGMA table_info({table})") as cursor:
@@ -67,6 +86,7 @@ async def init_db(db_path: str) -> None:
         await db.execute(_CREATE_SUBSCRIPTIONS)
         await db.execute(_CREATE_PAYMENTS)
         await db.execute(_CREATE_PROMO_CODES)
+        await db.execute(_CREATE_MANUAL_PAYMENTS)
         await _add_column_if_missing(
             db, "promo_codes", "days", "INTEGER NOT NULL DEFAULT 60"
         )

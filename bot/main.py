@@ -4,6 +4,7 @@ import logging
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
 from config import load_config
 from database.db import init_db
@@ -13,6 +14,7 @@ from handlers.start import router as start_router
 from handlers.join import router as join_router
 from handlers.payment import router as payment_router
 from handlers.admin import router as admin_router
+from handlers.manual_payment import router as manual_payment_router
 from scheduler import create_scheduler
 from webhook_server import create_webhook_app
 
@@ -28,6 +30,14 @@ async def main() -> None:
     await init_db(config.db_path)
 
     bot = Bot(token=config.bot_token)
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Начало"),
+            BotCommand(command="pay", description="Оформить или продлить подписку"),
+            BotCommand(command="help", description="Связаться с поддержкой"),
+        ])
+    except Exception as e:
+        logger.warning("Could not set bot commands: %s", e)
     dp = Dispatcher(storage=MemoryStorage())
 
     if config.yookassa_shop_id and config.yookassa_secret_key:
@@ -46,6 +56,7 @@ async def main() -> None:
     dp.include_router(join_router)
     dp.include_router(payment_router)
     dp.include_router(admin_router)
+    dp.include_router(manual_payment_router)
 
     scheduler = create_scheduler(bot, config, payment)
     scheduler.start()

@@ -8,7 +8,8 @@ from config import Config
 from database import queries
 from services.subscription import renew_subscription, kick_user
 from services.payment.base import PaymentProvider
-from keyboards import plans_keyboard
+from keyboards import payment_keyboard
+from services.pricing import rub
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +20,23 @@ async def send_expiry_reminders(bot: Bot, config: Config) -> None:
     )
     for sub in expiring:
         expires_date = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
-        try:
-            await bot.send_message(
-                sub["user_id"],
+        if sub.get("payment_token"):
+            text = (
                 f"⏰ Ваша подписка истекает {expires_date}. "
                 f"Мы попробуем продлить её автоматически, а если не получится — "
-                f"пришлём кнопки для оплаты.",
+                f"пришлём кнопки для оплаты."
             )
+            markup = None
+        else:
+            text = (
+                f"⏰ Ваша подписка истекает {expires_date}.\n"
+                f"Продлите её заранее, чтобы не потерять доступ: "
+                f"продление на месяц — {rub(config.RENEWAL_PRICE)}. "
+                f"Новый срок добавится к текущему."
+            )
+            markup = payment_keyboard(config, config.channel_id)
+        try:
+            await bot.send_message(sub["user_id"], text, reply_markup=markup)
         except Exception as e:
             logger.warning("Could not send reminder to %s: %s", sub["user_id"], e)
 
@@ -39,9 +50,7 @@ async def process_expired_subscriptions(
         if await queries.get_active_subscription(config.db_path, sub["user_id"]):
             await queries.expire_subscription(config.db_path, sub["id"])
             continue
-        amount = (
-            config.PLAN_1M_PRICE if sub["plan"] == "1m" else config.PLAN_2M_PRICE
-        )
+        amount = config.RENEWAL_PRICE
         result = await payment.charge_saved(
             sub["user_id"], sub.get("payment_token"), amount
         )
@@ -68,8 +77,8 @@ async def process_expired_subscriptions(
                     sub["user_id"],
                     f"⚠️ Срок подписки закончился, автоматически продлить её не удалось.\n"
                     f"Доступ сохранится ещё {config.GRACE_PERIOD_DAYS} дня — "
-                    f"выберите тариф, чтобы продлить:",
-                    reply_markup=plans_keyboard(config, config.channel_id),
+                    f"продлите за {rub(config.RENEWAL_PRICE)}, выберите способ оплаты:",
+                    reply_markup=payment_keyboard(config, config.channel_id),
                 )
             except Exception as e:
                 logger.warning("Could not notify %s: %s", sub["user_id"], e)
@@ -92,11 +101,22 @@ async def process_grace_period_ended(bot: Bot, config: Config) -> None:
         try:
             await bot.send_message(
                 sub["user_id"],
-                "❌ Подписка истекла, доступ к каналу закрыт.\n"
-                "Чтобы подписаться снова — перейдите по ссылке на канал.",
+                "❌ Подписка истекла, доступ к группе закрыт.\n"
+                "Чтобы вернуться — оформите подписку снова:",
+                reply_markup=payment_keyboard(config, config.channel_id),
             )
         except Exception as e:
             logger.warning("Could not notify %s: %s", sub["user_id"], e)
+
+
+async def resend_stale_reviews(bot: Bot, config: Config) -> None:
+    from handlers.manual_payment import send_for_review
+    stale = await queries.get_stale_manual_reviews(
+        config.db_path, config.MANUAL_REVIEW_RESEND_HOURS
+    )
+    for payment in stale:
+        await send_for_review(bot, config, payment, note="⏳ Ждёт проверки больше суток\n")
+        await queries.mark_manual_resent(config.db_path, payment["id"])
 
 
 async def daily_job(bot: Bot, config: Config, payment: PaymentProvider) -> None:
@@ -104,6 +124,7 @@ async def daily_job(bot: Bot, config: Config, payment: PaymentProvider) -> None:
     await send_expiry_reminders(bot, config)
     await process_expired_subscriptions(bot, config, payment)
     await process_grace_period_ended(bot, config)
+    await resend_stale_reviews(bot, config)
 
 
 def create_scheduler(

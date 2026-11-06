@@ -6,7 +6,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from config import Config
 from database import queries
-from keyboards import plans_keyboard
+from keyboards import payment_keyboard
+from services.pricing import price_for, offer_text
 from services.subscription import create_subscription
 from services.payment.base import PaymentProvider
 
@@ -22,15 +23,16 @@ async def cmd_pay(message: Message, config: Config) -> None:
         await message.answer("❌ Оплата недоступна.")
         return
     sub = await queries.get_active_subscription(config.db_path, user.id)
+    offer = await offer_text(config, user.id)
     if sub:
         expires = datetime.fromisoformat(sub["expires_at"]).strftime("%d.%m.%Y")
         text = (
             f"Ваша подписка активна до {expires}.\n"
-            f"Новый срок добавится к текущему — выберите тариф:"
+            f"Новый срок добавится к текущему.\n\n{offer}"
         )
     else:
-        text = "Выберите тариф для оформления подписки:"
-    await message.answer(text, reply_markup=plans_keyboard(config, config.channel_id))
+        text = offer
+    await message.answer(text, reply_markup=payment_keyboard(config, config.channel_id))
 
 
 @router.callback_query(F.data.startswith("plan:"))
@@ -44,10 +46,12 @@ async def handle_plan_selection(
     if plan not in ("1m", "2m"):
         await callback.answer()
         return
+    # Old messages still carry the retired 2-month button — sell a month instead
+    plan = "1m"
     channel_id = int(channel_id_str)
     user = callback.from_user
-    amount = config.PLAN_1M_PRICE if plan == "1m" else config.PLAN_2M_PRICE
-    plan_label = "1 месяц" if plan == "1m" else "2 месяца"
+    amount = await price_for(config.db_path, user.id, config)
+    plan_label = "1 месяц"
 
     await callback.answer()
     await callback.message.edit_text("⏳ Создаём платёж...")

@@ -67,7 +67,8 @@ async def handle_webhook(request: web.Request) -> web.Response:
             f"✅ Оплата прошла успешно!\n\n"
             f"Тариф: {plan_label}\n"
             f"Подписка активна до: {expires_str}\n\n"
-            f"Добро пожаловать в группу! 🎉",
+            f"Добро пожаловать в группу! 🎉"
+            + (f"\n\nВход в группу: {config.invite_link}" if config.invite_link else ""),
         )
     except Exception as e:
         logger.warning("Could not notify user %s: %s", user_id, e)

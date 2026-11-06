@@ -8,6 +8,7 @@ from scheduler import (
     send_expiry_reminders,
     process_expired_subscriptions,
     process_grace_period_ended,
+    resend_stale_reviews,
 )
 
 
@@ -30,6 +31,15 @@ def config(db):
     c.PLAN_2M_DAYS = 60
     c.GRACE_PERIOD_DAYS = 3
     c.REMINDER_DAYS_BEFORE = 3
+    c.FIRST_MONTH_PRICE = 1000
+    c.RENEWAL_PRICE = 500
+    c.admin_ids = frozenset()
+    c.reviewer_ids = frozenset({1})
+    c.mbank_card = ""
+    c.getcourse_link_first = ""
+    c.getcourse_link_renewal = ""
+    c.support_username = "psihogolik_help"
+    c.MANUAL_REVIEW_RESEND_HOURS = 24
     return c
 
 
@@ -119,7 +129,7 @@ async def test_failed_charge_offers_plan_buttons(db, config):
     await process_expired_subscriptions(bot, config, payment)
     markup = bot.send_message.call_args.kwargs["reply_markup"]
     callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert callbacks == ["plan:1m:-100", "plan:2m:-100"]
+    assert callbacks == ["plan:1m:-100", "support"]
 
 
 @pytest.mark.asyncio
@@ -129,3 +139,49 @@ async def test_no_reminder_if_already_renewed(db, config):
     bot = AsyncMock()
     await send_expiry_reminders(bot, config)
     bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_charge_uses_renewal_price(db, config):
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() - timedelta(hours=1))
+    payment = AsyncMock()
+    payment.charge_saved.return_value = MagicMock(success=False, error="no token")
+    await process_expired_subscriptions(AsyncMock(), config, payment)
+    assert payment.charge_saved.call_args.args[2] == 500
+
+
+@pytest.mark.asyncio
+async def test_reminder_without_saved_card_offers_payment(db, config):
+    # Auto-renewal can't happen without a saved card, so don't promise it
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=2))
+    bot = AsyncMock()
+    await send_expiry_reminders(bot, config)
+    assert "автоматически" not in bot.send_message.call_args.args[1]
+    assert "500 ₽" in bot.send_message.call_args.args[1]
+    markup = bot.send_message.call_args.kwargs["reply_markup"]
+    assert "plan:1m:-100" in [b.callback_data for row in markup.inline_keyboard for b in row]
+
+
+@pytest.mark.asyncio
+async def test_stale_manual_review_is_resent(db, config):
+    pay_id = await queries.create_manual_payment(db, 100, "mbank", 1000)
+    await queries.attach_manual_screenshot(db, pay_id, "file1", "photo")
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "UPDATE manual_payments SET submitted_at = ? WHERE id = ?",
+            ((datetime.utcnow() - timedelta(hours=25)).isoformat(), pay_id),
+        )
+        await conn.commit()
+    bot = AsyncMock()
+    await resend_stale_reviews(bot, config)
+    assert bot.send_photo.call_args.args[0] == 1
+    assert "file1" == bot.send_photo.call_args.kwargs["photo"]
+
+
+@pytest.mark.asyncio
+async def test_fresh_manual_review_not_resent(db, config):
+    pay_id = await queries.create_manual_payment(db, 100, "mbank", 1000)
+    await queries.attach_manual_screenshot(db, pay_id, "file1", "photo")
+    bot = AsyncMock()
+    await resend_stale_reviews(bot, config)
+    bot.send_photo.assert_not_called()

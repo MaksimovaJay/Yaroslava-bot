@@ -288,3 +288,115 @@ async def get_monthly_revenue(db_path: str) -> int:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0
+
+
+async def has_current_subscription(db_path: str, user_id: int) -> bool:
+    """Active or in grace period — a subscription not yet closed by the scheduler."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM subscriptions WHERE user_id = ? AND status = 'active' LIMIT 1",
+            (user_id,),
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+
+async def create_manual_payment(
+    db_path: str, user_id: int, method: str, amount: int
+) -> int:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        # Only the latest chosen method waits for a screenshot
+        await db.execute(
+            """UPDATE manual_payments SET status = 'abandoned'
+               WHERE user_id = ? AND status = 'awaiting_screenshot'""",
+            (user_id,),
+        )
+        cursor = await db.execute(
+            "INSERT INTO manual_payments (user_id, method, amount) VALUES (?, ?, ?)",
+            (user_id, method, amount),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_manual_payment(db_path: str, payment_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT m.*, u.first_name, u.username
+               FROM manual_payments m JOIN users u ON u.id = m.user_id
+               WHERE m.id = ?""",
+            (payment_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_open_manual_payment(db_path: str, user_id: int) -> Optional[dict]:
+    """Latest payment still waiting for a screenshot or for review."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM manual_payments
+               WHERE user_id = ?
+                 AND status IN ('awaiting_screenshot', 'awaiting_review')
+               ORDER BY id DESC LIMIT 1""",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def attach_manual_screenshot(
+    db_path: str, payment_id: int, file_id: str, file_kind: str
+) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """UPDATE manual_payments
+               SET file_id = ?, file_kind = ?, status = 'awaiting_review',
+                   submitted_at = ?
+               WHERE id = ?""",
+            (file_id, file_kind, datetime.utcnow().isoformat(), payment_id),
+        )
+        await db.commit()
+
+
+async def decide_manual_payment(
+    db_path: str, payment_id: int, status: str, reviewer_id: int
+) -> bool:
+    """Returns False if someone already decided — two admins can't both approve."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            """UPDATE manual_payments
+               SET status = ?, reviewed_by = ?, reviewed_at = ?
+               WHERE id = ? AND status = 'awaiting_review'""",
+            (status, reviewer_id, datetime.utcnow().isoformat(), payment_id),
+        )
+        await db.commit()
+        return cursor.rowcount == 1
+
+
+async def get_stale_manual_reviews(db_path: str, hours: int) -> list:
+    """Unreviewed screenshots older than `hours` that weren't resent within `hours`."""
+    from datetime import timedelta
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT m.*, u.first_name, u.username
+               FROM manual_payments m JOIN users u ON u.id = m.user_id
+               WHERE m.status = 'awaiting_review'
+                 AND datetime(m.submitted_at) <= datetime(?)
+                 AND (m.resent_at IS NULL OR datetime(m.resent_at) <= datetime(?))""",
+            (cutoff, cutoff),
+        ) as cursor:
+            return [dict(row) async for row in cursor]
+
+
+async def mark_manual_resent(db_path: str, payment_id: int) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE manual_payments SET resent_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), payment_id),
+        )
+        await db.commit()

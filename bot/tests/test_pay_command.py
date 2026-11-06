@@ -27,7 +27,8 @@ async def test_pay_shows_plan_buttons(config):
     await cmd_pay(msg, config)
     markup = msg.answer.call_args.kwargs["reply_markup"]
     callbacks = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert callbacks == ["plan:1m:-100", "plan:2m:-100"]
+    assert callbacks == ["plan:1m:-100", "support"]
+    assert "1 000 ₽" in msg.answer.call_args.args[0]
 
 
 @pytest.mark.asyncio

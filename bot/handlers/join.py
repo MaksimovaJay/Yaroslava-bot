@@ -3,7 +3,8 @@ from aiogram import Router, Bot, F
 from aiogram.types import ChatJoinRequest, Message
 from config import Config
 from database import queries
-from keyboards import plans_keyboard
+from keyboards import payment_keyboard
+from services.pricing import offer_text
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -49,9 +50,9 @@ async def handle_join_request(
         await bot.send_message(
             user.id,
             f"👋 Привет, {user.first_name}!\n\n"
-            f"Это закрытый канал с платной подпиской.\n"
-            f"Выберите тариф:",
-            reply_markup=plans_keyboard(config, channel_id),
+            f"Это закрытая группа «Журнал Психоголика» с платной подпиской.\n"
+            f"{await offer_text(config, user.id)}",
+            reply_markup=payment_keyboard(config, channel_id),
         )
     except Exception:
         logger.warning(
