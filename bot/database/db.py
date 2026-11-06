@@ -90,4 +90,5 @@ async def init_db(db_path: str) -> None:
         await _add_column_if_missing(
             db, "promo_codes", "days", "INTEGER NOT NULL DEFAULT 60"
         )
+        await _add_column_if_missing(db, "manual_payments", "payer_info", "TEXT")
         await db.commit()

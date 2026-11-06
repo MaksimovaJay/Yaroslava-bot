@@ -8,6 +8,7 @@ from handlers.manual_payment import (
     choose_manual_method,
     receive_screenshot,
     review_payment,
+    receive_payer_info,
 )
 
 CARD = "4177 4901 6679 6831"
@@ -43,11 +44,20 @@ def _callback(data, user_id=5):
     return cb
 
 
-def _photo_message(user_id=5):
+def _photo_message(user_id=5, caption="Иванова Анна Сергеевна"):
     msg = MagicMock()
     msg.from_user = _user(user_id)
     msg.photo = [MagicMock(file_id="small"), MagicMock(file_id="big")]
     msg.document = None
+    msg.caption = caption
+    msg.answer = AsyncMock()
+    return msg
+
+
+def _text_message(text, user_id=5):
+    msg = MagicMock()
+    msg.from_user = _user(user_id)
+    msg.text = text
     msg.answer = AsyncMock()
     return msg
 
@@ -176,3 +186,91 @@ async def test_price_is_fixed_when_method_chosen(config):
     )
     await receive_screenshot(_photo_message(), bot, config)
     assert "1 000 ₽" in bot.send_photo.call_args.kwargs["caption"]
+
+
+@pytest.mark.asyncio
+async def test_method_message_asks_for_payer_in_caption(config):
+    cb = await _choose(config)
+    assert "ФИО" in cb.message.edit_text.call_args.args[0]
+    cb = await _choose(config, "getcourse")
+    assert "email" in cb.message.edit_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_caption_payer_reaches_reviewers(config):
+    bot = AsyncMock()
+    await _submit(config, bot)
+    kwargs = bot.send_photo.call_args.kwargs
+    assert "Плательщик: Иванова Анна Сергеевна" in kwargs["caption"]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_sees_clickable_escaped_name(config):
+    bot = AsyncMock()
+    await queries.upsert_user(config.db_path, 5, None, "<Аня>")
+    await _choose(config)
+    msg = _photo_message()
+    msg.from_user = MagicMock(id=5, username=None, first_name="<Аня>")
+    await receive_screenshot(msg, bot, config)
+    kwargs = bot.send_photo.call_args.kwargs
+    assert kwargs["parse_mode"] == "HTML"
+    assert '<a href="tg://user?id=5">&lt;Аня&gt;</a>' in kwargs["caption"]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_sees_first_month(config):
+    bot = AsyncMock()
+    await _submit(config, bot)
+    assert "первый месяц" in bot.send_photo.call_args.kwargs["caption"]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_sees_renewal_and_current_expiry(config):
+    await queries.upsert_user(config.db_path, 5, "u", "U")
+    expires = datetime.utcnow() + timedelta(days=4)
+    await queries.create_subscription(config.db_path, 5, "1m", expires)
+    bot = AsyncMock()
+    await _submit(config, bot)
+    caption = bot.send_photo.call_args.kwargs["caption"]
+    assert "продление" in caption and expires.strftime("%d.%m.%Y") in caption
+
+
+@pytest.mark.asyncio
+async def test_missing_payer_is_asked_but_screenshot_still_sent(config):
+    bot = AsyncMock()
+    await _choose(config)
+    msg = _photo_message(caption=None)
+    await receive_screenshot(msg, bot, config)
+    bot.send_photo.assert_called_once()
+    assert "ФИО" in msg.answer.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_payer_sent_later_goes_to_reviewers_with_buttons(config):
+    bot = AsyncMock()
+    await _choose(config)
+    await receive_screenshot(_photo_message(caption=None), bot, config)
+    reply = _text_message("Петров Пётр")
+    await receive_payer_info(reply, bot, config)
+    args, kwargs = bot.send_message.call_args
+    assert args[0] == REVIEWER and "Петров Пётр" in args[1]
+    assert [c.split(":")[1] for c in _callbacks(kwargs["reply_markup"])] == ["ok", "no"]
+    assert "Спасибо" in reply.answer.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_text_without_waiting_payment_is_ignored(config):
+    bot = AsyncMock()
+    reply = _text_message("привет")
+    await receive_payer_info(reply, bot, config)
+    bot.send_message.assert_not_called()
+    reply.answer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_payer_not_asked_again_once_given(config):
+    bot = AsyncMock()
+    await _submit(config, bot)  # caption already had the payer
+    reply = _text_message("ещё вопрос")
+    await receive_payer_info(reply, bot, config)
+    bot.send_message.assert_not_called()

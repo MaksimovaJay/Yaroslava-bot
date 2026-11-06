@@ -348,15 +348,41 @@ async def get_open_manual_payment(db_path: str, user_id: int) -> Optional[dict]:
 
 
 async def attach_manual_screenshot(
-    db_path: str, payment_id: int, file_id: str, file_kind: str
+    db_path: str, payment_id: int, file_id: str, file_kind: str,
+    payer_info: Optional[str] = None,
 ) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
             """UPDATE manual_payments
                SET file_id = ?, file_kind = ?, status = 'awaiting_review',
-                   submitted_at = ?
+                   submitted_at = ?, payer_info = COALESCE(?, payer_info)
                WHERE id = ?""",
-            (file_id, file_kind, datetime.utcnow().isoformat(), payment_id),
+            (file_id, file_kind, datetime.utcnow().isoformat(), payer_info, payment_id),
+        )
+        await db.commit()
+
+
+async def get_review_missing_payer(db_path: str, user_id: int) -> Optional[dict]:
+    """Latest screenshot under review that still has no payer name/email."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT m.*, u.first_name, u.username
+               FROM manual_payments m JOIN users u ON u.id = m.user_id
+               WHERE m.user_id = ? AND m.status = 'awaiting_review'
+                 AND m.payer_info IS NULL
+               ORDER BY m.id DESC LIMIT 1""",
+            (user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def set_payer_info(db_path: str, payment_id: int, payer_info: str) -> None:
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE manual_payments SET payer_info = ? WHERE id = ?",
+            (payer_info, payment_id),
         )
         await db.commit()
 
