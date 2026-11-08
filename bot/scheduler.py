@@ -10,6 +10,7 @@ from services.subscription import renew_subscription, kick_user
 from services.payment.base import PaymentProvider
 from keyboards import payment_keyboard
 from services.pricing import rub
+from services.announcement import new_methods_line
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ async def send_expiry_reminders(bot: Bot, config: Config) -> None:
                 f"продление на месяц — {rub(config.RENEWAL_PRICE)}. "
                 f"Новый срок добавится к текущему."
             )
+            news = new_methods_line(config)
+            if news:
+                text += f"\n\n{news}"
             markup = payment_keyboard(config, config.channel_id)
         try:
             await bot.send_message(sub["user_id"], text, reply_markup=markup)

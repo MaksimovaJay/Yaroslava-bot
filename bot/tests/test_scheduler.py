@@ -185,3 +185,14 @@ async def test_fresh_manual_review_not_resent(db, config):
     bot = AsyncMock()
     await resend_stale_reviews(bot, config)
     bot.send_photo.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reminder_tells_about_new_payment_methods(db, config):
+    config.mbank_card = "4177"
+    config.getcourse_link_first = "https://gc.example"
+    await queries.create_subscription(db, 100, "1m", datetime.utcnow() + timedelta(days=2))
+    bot = AsyncMock()
+    await send_expiry_reminders(bot, config)
+    text = bot.send_message.call_args.args[1]
+    assert "МБанк" in text and "GetCourse" in text

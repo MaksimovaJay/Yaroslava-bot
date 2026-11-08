@@ -426,3 +426,36 @@ async def mark_manual_resent(db_path: str, payment_id: int) -> None:
             (datetime.utcnow().isoformat(), payment_id),
         )
         await db.commit()
+
+
+async def get_announcement_recipients(
+    db_path: str, key: str, exclude_ids: frozenset
+) -> list:
+    """People with no subscription in progress who haven't got this announcement."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            """SELECT u.id FROM users u
+               WHERE u.is_banned = 0
+                 AND NOT EXISTS (
+                     SELECT 1 FROM subscriptions s
+                     WHERE s.user_id = u.id AND s.status = 'active'
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM announcements a
+                     WHERE a.user_id = u.id AND a.key = ?
+                 )
+               ORDER BY u.id""",
+            (key,),
+        ) as cursor:
+            return [row[0] async for row in cursor if row[0] not in exclude_ids]
+
+
+async def claim_announcement(db_path: str, user_id: int, key: str) -> bool:
+    """Returns False if this person already got (or is getting) the announcement."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO announcements (user_id, key) VALUES (?, ?)",
+            (user_id, key),
+        )
+        await db.commit()
+        return cursor.rowcount == 1

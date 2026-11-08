@@ -11,6 +11,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import Config
 from database import queries
 from services.subscription import kick_user, create_subscription, days_label
+from services.announcement import (
+    announcement_recipients, announcement_text, send_announcement,
+)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -32,8 +35,44 @@ def _admin_keyboard():
     builder.button(text="🚫 Заблокировать", callback_data="admin:ban")
     builder.button(text="➕ Добавить вручную", callback_data="admin:add")
     builder.button(text="🎟 Промокоды", callback_data="admin:promo")
-    builder.adjust(2)
+    builder.button(text="📣 Рассылка о новых способах оплаты", callback_data="admin:announce")
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
+
+
+@router.callback_query(F.data == "admin:announce")
+async def admin_announce_preview(callback: CallbackQuery, config: Config) -> None:
+    if not _is_admin(callback.from_user.id, config):
+        return
+    await callback.answer()
+    count = len(await announcement_recipients(config))
+    builder = InlineKeyboardBuilder()
+    if count:
+        builder.button(text=f"✅ Отправить ({count})", callback_data="admin:announce_go")
+    builder.button(text="◀️ Назад", callback_data="admin:back")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        f"📣 Рассылка тем, у кого нет подписки\n"
+        f"Получателей: {count} (каждый получит её один раз)\n\n"
+        f"Текст:\n\n{announcement_text(config)}",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data == "admin:announce_go")
+async def admin_announce_send(callback: CallbackQuery, bot: Bot, config: Config) -> None:
+    if not _is_admin(callback.from_user.id, config):
+        return
+    await callback.answer()
+    await callback.message.edit_text("⏳ Отправляем…")
+    sent, failed = await send_announcement(bot, config)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="◀️ Меню", callback_data="admin:back")
+    note = f"\nНе доставлено: {failed} (скорее всего, удалили бота)" if failed else ""
+    await callback.message.edit_text(
+        f"✅ Рассылка завершена.\nОтправлено: {sent}{note}",
+        reply_markup=builder.as_markup(),
+    )
 
 
 def _is_admin(user_id: int, config: Config) -> bool:

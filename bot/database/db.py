@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS promo_codes (
 )
 """
 
+_CREATE_ANNOUNCEMENTS = """
+CREATE TABLE IF NOT EXISTS announcements (
+    user_id  INTEGER NOT NULL REFERENCES users(id),
+    key      TEXT NOT NULL,
+    sent_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, key)
+)
+"""
+
 _CREATE_MANUAL_PAYMENTS = """
 CREATE TABLE IF NOT EXISTS manual_payments (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,6 +96,7 @@ async def init_db(db_path: str) -> None:
         await db.execute(_CREATE_PAYMENTS)
         await db.execute(_CREATE_PROMO_CODES)
         await db.execute(_CREATE_MANUAL_PAYMENTS)
+        await db.execute(_CREATE_ANNOUNCEMENTS)
         await _add_column_if_missing(
             db, "promo_codes", "days", "INTEGER NOT NULL DEFAULT 60"
         )
