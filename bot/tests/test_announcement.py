@@ -54,6 +54,7 @@ def test_text_names_configured_methods(config):
     text = announcement_text(config)
     assert "МБанк" in text and "GetCourse" in text
     assert "1 000 ₽" in text and "500 ₽" in text
+    assert "Ириной Астафьевой" in text and "9 ноября" in text
 
 
 def test_new_methods_line_skips_unconfigured(config):
